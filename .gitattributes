@@ -1,0 +1,19 @@
+# Detect text automatically; keep source and documentation consistent across platforms.
+* text=auto
+.gitignore text eol=lf
+.gitattributes text eol=lf
+*.java text eol=lf
+*.xml text eol=lf
+*.md text eol=lf
+
+# PowerShell launch/build scripts use native Windows line endings.
+*.ps1 text eol=crlf
+
+# Preserve binary assets without text conversion or textual diffs.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.jar binary
+*.dll binary
+*.lnk binary
