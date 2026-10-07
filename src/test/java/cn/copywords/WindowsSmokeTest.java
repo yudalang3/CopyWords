@@ -107,7 +107,7 @@ class WindowsSmokeTest {
         var notices = new LinkedBlockingQueue<String>(); var count = new AtomicInteger();
         var config = new Config(List.of(Entry.create("A", new Hotkey(Hotkey.ALT, '7')),
                 Entry.create("B", new Hotkey(Hotkey.CTRL | Hotkey.SHIFT, '8')),
-                Entry.create("C", new Hotkey(Hotkey.CAPS | Hotkey.CTRL, '9'))), false, false);
+                Entry.create("C", new Hotkey(Hotkey.CAPS | Hotkey.CTRL, '9'))), false, false, false);
         try (var editor = new Editor(); var clipboard = new ClipboardService(notices::add);
              var hotkeys = new GlobalHotkeys(request -> { count.incrementAndGet(); clipboard.paste(request); })) {
             assertTrue(hotkeys.start(config).isEmpty());
@@ -144,7 +144,7 @@ class WindowsSmokeTest {
     @Test void altBindingsAndCaptureAcceptOnlyLeftAltEvenAfterFastRelease() throws Exception {
         var requests = new LinkedBlockingQueue<PasteRequest>(); var captured = new LinkedBlockingQueue<Hotkey>();
         var config = new Config(List.of(Entry.create("A", new Hotkey(Hotkey.ALT, '7')),
-                Entry.create("B", new Hotkey(Hotkey.CAPS | Hotkey.ALT, '9'))), false, false);
+                Entry.create("B", new Hotkey(Hotkey.CAPS | Hotkey.ALT, '9'))), false, false, false);
         try (var editor = new Editor(); var hotkeys = new GlobalHotkeys(requests::add)) {
             assertTrue(hotkeys.start(config).isEmpty());
             key(0xA5, true); key('7', true); key('7', false); key(0xA5, false);
@@ -169,7 +169,7 @@ class WindowsSmokeTest {
     @Test void rapidCapsRequestsInsertBothTextsWithoutDigits() throws Exception {
         var notices = new LinkedBlockingQueue<String>();
         var config = new Config(List.of(Entry.create("A", new Hotkey(Hotkey.CAPS, '1')),
-                Entry.create("B", new Hotkey(Hotkey.CAPS, '2'))), false, false);
+                Entry.create("B", new Hotkey(Hotkey.CAPS, '2'))), false, false, false);
         try (var editor = new Editor(); var clipboard = new ClipboardService(notices::add);
              var hotkeys = new GlobalHotkeys(clipboard::paste)) {
             assertTrue(hotkeys.start(config).isEmpty());
@@ -203,7 +203,7 @@ class WindowsSmokeTest {
     @Test void reservedCtrlVIsSkippedAndManualPasteStillWorks() throws Exception {
         var notices = new LinkedBlockingQueue<String>(); var count = new AtomicInteger();
         var config = new Config(List.of(Entry.create("bad", new Hotkey(Hotkey.CTRL, 'V')),
-                Entry.create("A", new Hotkey(Hotkey.CAPS, '1'))), false, false);
+                Entry.create("A", new Hotkey(Hotkey.CAPS, '1'))), false, false, false);
         try (var editor = new Editor(); var clipboard = new ClipboardService(notices::add);
              var hotkeys = new GlobalHotkeys(request -> { count.incrementAndGet(); clipboard.paste(request); })) {
             var warnings = hotkeys.start(config); assertEquals(1, warnings.size()); assertTrue(warnings.getFirst().contains("Ctrl + V"));
@@ -251,7 +251,7 @@ class WindowsSmokeTest {
         });
         Thread.sleep(300);
         var defaultConfig = new Config(List.of(Entry.create("AI4S", new Hotkey(Hotkey.ALT, '1')),
-                Entry.create("人生价值", new Hotkey(6, '2')), Entry.create("xxx@example.com", new Hotkey(Hotkey.ALT, '3'))), false, false);
+                Entry.create("人生价值", new Hotkey(6, '2')), Entry.create("xxx@example.com", new Hotkey(Hotkey.ALT, '3'))), false, false, false);
         try (var clipboard = new ClipboardService(notices::add)) {
             try (var service = new GlobalHotkeys(request -> { count.incrementAndGet(); clipboard.paste(request); })) {
                 assertTrue(service.start(defaultConfig).isEmpty());
@@ -278,7 +278,7 @@ class WindowsSmokeTest {
                 assertTrue(service.resume().isEmpty());
                 clipboard.resume();
                 press(0xA4, '1'); assertNotNull(notices.poll(3, TimeUnit.SECONDS));
-                var changed = new Config(List.of(Entry.create("  保存后的中文  ", new Hotkey(Hotkey.ALT, '1'))), false, false);
+                var changed = new Config(List.of(Entry.create("  保存后的中文  ", new Hotkey(Hotkey.ALT, '1'))), false, false, false);
                 service.apply(changed, () -> new ConfigStore(directory.resolve("config.xml")).save(changed));
                 press(0xA4, '1'); assertNotNull(notices.poll(3, TimeUnit.SECONDS));
                 assertEquals("  保存后的中文  ", clipboardText());
@@ -293,19 +293,19 @@ class WindowsSmokeTest {
 
     @Test void conflictingAndFailedSavesKeepOldBindings() throws Exception {
         var messages = new LinkedBlockingQueue<String>();
-        var original = new Config(List.of(Entry.create("old", new Hotkey(Hotkey.ALT, '8'))), false, false);
-        var occupied = new Config(List.of(Entry.create("busy", new Hotkey(Hotkey.ALT, '9'))), false, false);
+        var original = new Config(List.of(Entry.create("old", new Hotkey(Hotkey.ALT, '8'))), false, false, false);
+        var occupied = new Config(List.of(Entry.create("busy", new Hotkey(Hotkey.ALT, '9'))), false, false, false);
         try (var service = new GlobalHotkeys(request -> messages.add(request.text())); var blocker = new GlobalHotkeys(request -> { })) {
             assertTrue(service.start(original).isEmpty()); assertTrue(blocker.start(occupied).isEmpty());
-            var candidate = new Config(List.of(Entry.create("new", new Hotkey(Hotkey.ALT, '9'))), false, false);
+            var candidate = new Config(List.of(Entry.create("new", new Hotkey(Hotkey.ALT, '9'))), false, false, false);
             assertThrows(IllegalStateException.class, () -> service.apply(candidate, () -> fail("must not persist")));
             press(0xA4, '8'); assertEquals("old", messages.poll(3, TimeUnit.SECONDS));
-            var staged = new Config(List.of(Entry.create("new", new Hotkey(Hotkey.ALT, '7'))), false, false);
+            var staged = new Config(List.of(Entry.create("new", new Hotkey(Hotkey.ALT, '7'))), false, false, false);
             assertThrows(IllegalStateException.class, () -> service.apply(staged, () -> { throw new java.io.IOException("disk failure"); }));
             press(0xA4, '8'); assertEquals("old", messages.poll(3, TimeUnit.SECONDS));
             try (var released = new GlobalHotkeys(text -> { })) { assertTrue(released.start(staged).isEmpty()); }
             var partiallyAvailable = new Config(List.of(Entry.create("blocked", new Hotkey(Hotkey.ALT, '9')),
-                    Entry.create("works", new Hotkey(Hotkey.ALT, '6'))), false, false);
+                    Entry.create("works", new Hotkey(Hotkey.ALT, '6'))), false, false, false);
             try (var partial = new GlobalHotkeys(request -> messages.add(request.text()))) {
                 assertEquals(1, partial.start(partiallyAvailable).size());
                 press(0xA4, '6'); assertEquals("works", messages.poll(3, TimeUnit.SECONDS));
@@ -317,7 +317,7 @@ class WindowsSmokeTest {
         var path = directory.resolve("config.xml"); var store = new ConfigStore(path);
         var old = Config.defaults(); store.save(old);
         try (var handle = FileChannel.open(path, StandardOpenOption.READ, com.sun.nio.file.ExtendedOpenOption.NOSHARE_DELETE)) {
-            assertThrows(java.io.IOException.class, () -> store.save(new Config(List.of(), false, false)));
+            assertThrows(java.io.IOException.class, () -> store.save(new Config(List.of(), false, false, false)));
             assertEquals(old, store.load());
         }
         try (var files = Files.list(directory)) { assertEquals(1, files.count()); }
@@ -390,7 +390,7 @@ class WindowsSmokeTest {
             assertEquals(!initialCaps, Toolkit.getDefaultToolkit().getLockingKeyState(java.awt.event.KeyEvent.VK_CAPS_LOCK), "standalone Caps retains toggle");
             key(0x14, true); key(0x14, false); Thread.sleep(200);
             assertEquals(initialCaps, Toolkit.getDefaultToolkit().getLockingKeyState(java.awt.event.KeyEvent.VK_CAPS_LOCK));
-            service.apply(new Config(List.of(Entry.create("  新内容  ", new Hotkey(Hotkey.CAPS, '1'))), false, false), () -> { });
+            service.apply(new Config(List.of(Entry.create("  新内容  ", new Hotkey(Hotkey.CAPS, '1'))), false, false, false), () -> { });
             press(0x14, '1'); assertNotNull(notices.poll(3, TimeUnit.SECONDS)); assertEquals("  新内容  ", clipboardText());
             clipboard.pause(); service.pause(); press(0x14, '1'); assertNull(notices.poll(200, TimeUnit.MILLISECONDS));
             assertTrue(service.resume().isEmpty());

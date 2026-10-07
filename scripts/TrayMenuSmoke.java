@@ -10,7 +10,7 @@ class TrayMenuSmoke {
     public static void main(String[] args) throws Exception {
         Path home = Files.createTempDirectory(Path.of("temp").toAbsolutePath(), "tray-menu-");
         Config defaults = Config.defaults();
-        new ConfigStore(home.resolve("config.xml")).save(new Config(defaults.entries(), false, false));
+        new ConfigStore(home.resolve("config.xml")).save(new Config(defaults.entries(), false, false, false));
         var channel = FileChannel.open(home.resolve("instance.lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
         var lock = channel.tryLock();
         SwingUtilities.invokeAndWait(() -> {

@@ -20,6 +20,7 @@ public final class CopyWords {
     private final List<Row> rows = new ArrayList<>();
     private final JCheckBox autoStart = new JCheckBox("Windows 启动时自动运行");
     private final JCheckBox startHidden = new JCheckBox("启动后最小化到系统托盘");
+    private final JCheckBox closeToTray = new JCheckBox("点击窗口关闭按钮时，隐藏到系统托盘继续运行（不勾选则退出程序）");
     private final JLabel status = new JLabel("设置条目后点击保存，快捷键即可在其他应用中使用");
     private final JButton save = new JButton("保存");
     private final ConfigStore store;
@@ -71,7 +72,7 @@ public final class CopyWords {
         frame.addWindowListener(new WindowAdapter() {
             @Override public void windowClosing(WindowEvent event) {
                 if (saving) return;
-                if (tray != null) { saveWindowState(); frame.setVisible(false); } else requestExit();
+                if (closeToTray.isSelected() && tray != null) { saveWindowState(); frame.setVisible(false); } else requestExit();
             }
         });
         frame.setIconImage(icon());
@@ -122,7 +123,8 @@ public final class CopyWords {
         options.setLayout(new BoxLayout(options, BoxLayout.Y_AXIS));
         autoStart.setSelected(saved.autoStart()); startHidden.setSelected(saved.startHidden());
         autoStart.setName("autoStart"); startHidden.setName("startHidden");
-        options.add(autoStart); options.add(startHidden);
+        closeToTray.setSelected(saved.closeToTray()); closeToTray.setName("closeToTray");
+        options.add(autoStart); options.add(startHidden); options.add(closeToTray);
         bottom.add(options, BorderLayout.NORTH);
         JPanel footer = new JPanel(new BorderLayout(12, 0));
         status.setFont(status.getFont().deriveFont(12f));
@@ -212,6 +214,7 @@ public final class CopyWords {
         Row(Entry entry) {
             id = entry.id(); hotkey = entry.hotkey();
             text = new JTextField(entry.text()); text.setName("text-" + id);
+            text.setBorder(new CompoundBorder(text.getBorder(), new EmptyBorder(0, 8, 0, 0)));
             normalTextBorder = text.getBorder();
             panel.setBorder(new EmptyBorder(7, 8, 7, 8));
             panel.setPreferredSize(new Dimension(600, 50));
@@ -232,7 +235,7 @@ public final class CopyWords {
         Entry entry() { return new Entry(id, text.getText(), hotkey); }
     }
 
-    private Config draft() { return new Config(rows.stream().map(Row::entry).toList(), autoStart.isSelected(), startHidden.isSelected()); }
+    private Config draft() { return new Config(rows.stream().map(Row::entry).toList(), autoStart.isSelected(), startHidden.isSelected(), closeToTray.isSelected()); }
 
     private void capture(Row row) {
         clipboard.pause();
@@ -343,7 +346,7 @@ public final class CopyWords {
             int index = Integer.parseInt(match.group(1)) - 1;
             if (index >= 0 && index < rows.size()) {
                 Row row = rows.get(index);
-                row.text.setBorder(new LineBorder(new Color(190, 55, 55), 2));
+                row.text.setBorder(new CompoundBorder(new LineBorder(new Color(190, 55, 55), 2), new EmptyBorder(0, 8, 0, 0)));
                 rowsPanel.scrollRectToVisible(row.panel.getBounds());
             }
         }

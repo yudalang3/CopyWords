@@ -139,6 +139,7 @@ public class UiSmoke {
 
     public static void main(String[] args) throws Exception {
         String suffix = args.length == 0 ? "normal" : args[0];
+        boolean saveOnExit = args.length > 1 && args[1].equals("save");
         Path home = Files.createTempDirectory(Path.of("temp").toAbsolutePath(), "ui-smoke-");
         Path config = home.resolve("config.xml");
         Path jar = Path.of("dist/CopyWords.jar").toAbsolutePath();
@@ -169,6 +170,8 @@ public class UiSmoke {
                     GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds().height),
                     "default width unchanged and default height doubled within screen bounds");
             check(!Files.exists(config) && startup.snapshot() == null, "first launch does not save config or enable autostart");
+            JCheckBox closeToTray = (JCheckBox) field(app, "closeToTray");
+            check(!closeToTray.isSelected(), "close-to-tray defaults to unchecked");
             screenshot(suffix);
             check(findScroll(frame).getViewport().getViewRect().contains(((JPanel) field(rows().getLast(), "panel")).getBounds()),
                     "all five rows fully visible at initial size");
@@ -176,6 +179,26 @@ public class UiSmoke {
                     "no horizontal scrolling at initial size");
             duplicateInstance(home, jar);
             Object first = rows().getFirst();
+            JTextField firstText = (JTextField) field(first, "text");
+            javax.swing.border.CompoundBorder padded = (javax.swing.border.CompoundBorder) firstText.getBorder();
+            check(padded.getInsideBorder().getBorderInsets(firstText).left == 8, "text has eight logical pixels of left padding");
+            onEdt(() -> {
+                closeToTray.setSelected(true);
+                frame.dispatchEvent(new WindowEvent(frame, WindowEvent.WINDOW_CLOSING));
+            });
+            check(!frame.isVisible() && !Files.exists(config), "checking close-to-tray hides immediately without saving config");
+            onEdt(() -> ((JMenuItem) ((JPopupMenu) uncheckedField(app, "trayMenu")).getComponent(0)).doClick());
+            onEdt(() -> closeToTray.setSelected(false));
+            SwingUtilities.invokeLater(() -> {
+                try {
+                    Method markError = CopyWords.class.getDeclaredMethod("markError", String.class);
+                    markError.setAccessible(true); markError.invoke(app, "第 1 行测试错误");
+                } catch (Exception exception) { throw new RuntimeException(exception); }
+            });
+            waitFor(() -> dialog("CopyWords") != null, "error dialog missing");
+            check(firstText.getInsets().left == 10, "error border retains eight pixels of inner padding");
+            screenshot(suffix + "-error");
+            onEdt(() -> dialog("CopyWords").dispose());
             systemClipboard.setContents(new StringSelection("capture sentinel"), null);
             Hotkey original = (Hotkey) field(first, "hotkey");
             capture(first, "取消");
@@ -194,6 +217,7 @@ public class UiSmoke {
             check(new Hotkey(Hotkey.CAPS, '1').equals(field(rows().getLast(), "hotkey")), "add chooses first unused Caps digit");
             save(config);
             Config persisted = new ConfigStore(config).load();
+            check(firstText.getBorder() == field(first, "normalTextBorder"), "successful save restores padded normal border");
             check(persisted.entries().size() == 6 && persisted.entries().getFirst().text().equals("  测试中文  "),
                     "save preserves changed shortcut, ordered rows, Chinese and spaces");
             check(persisted.entries().getFirst().hotkey().equals(new Hotkey(6, '4')), "changed binding persisted");
@@ -204,16 +228,21 @@ public class UiSmoke {
             });
             save(config);
             check(new ConfigStore(config).load().entries().size() == 5, "delete and save remove entry");
-            onEdt(() -> frame.setBounds(80, 70, 680, 460));
+            onEdt(() -> frame.setBounds(80, 70, 660, 440));
             Thread.sleep(200);
             screenshot(suffix + "-resized");
             check(!findScroll(frame).getHorizontalScrollBar().isVisible(), "no horizontal scrollbar at minimum width");
+            check(closeToTray.getWidth() >= closeToTray.getPreferredSize().width, "close-to-tray label fits at minimum width");
+            check(button(frame, "保存").isShowing() && button(frame, "保存").getHeight() == 34, "save button remains visible at minimum size");
             check(frame.getGraphicsConfiguration().getDefaultTransform().getScaleX() > 0,
                     "rendered DPI scale=" + frame.getGraphicsConfiguration().getDefaultTransform().getScaleX());
             Rectangle normalBounds = frame.getBounds();
             byte[] savedTextConfig = Files.readAllBytes(config);
             onEdt(() -> {
-                try { ((JTextField) field(first, "text")).setText("unsaved geometry draft"); }
+                try {
+                    ((JTextField) field(first, "text")).setText("unsaved geometry draft");
+                    closeToTray.setSelected(true);
+                }
                 catch (Exception exception) { throw new RuntimeException(exception); }
                 frame.dispatchEvent(new WindowEvent(frame, WindowEvent.WINDOW_CLOSING));
             });
@@ -280,6 +309,9 @@ public class UiSmoke {
             waitFor(frame::isVisible, "tray open failed");
             check(frame.isVisible(), "tray menu reopens settings");
             check(frame.getBounds().equals(normalBounds), "tray reopen retains position and size");
+            onEdt(() -> firstText.setText("  测试中文  "));
+            save(config);
+            check(new ConfigStore(config).load().closeToTray(), "saving remembers close-to-tray preference");
             onEdt(() -> {
                 try {
                     Method popup = CopyWords.class.getDeclaredMethod("showTrayMenu", int.class, int.class);
@@ -315,6 +347,8 @@ public class UiSmoke {
                 } catch (Exception exception) { throw new RuntimeException(exception); }
             });
             check(!frame.isVisible(), "saved hidden-start preference is honored on restart");
+            JCheckBox restartedCloseToTray = (JCheckBox) field(app, "closeToTray");
+            check(restartedCloseToTray.isSelected(), "restart restores saved close-to-tray preference");
             check(((JTextField) field(rows().getFirst(), "text")).getText().equals("  测试中文  "), "restart reloads saved text");
             JPopupMenu restartedMenu = (JPopupMenu) field(app, "trayMenu");
             onEdt(() -> ((JMenuItem) restartedMenu.getComponent(0)).doClick());
@@ -329,10 +363,28 @@ public class UiSmoke {
                 try { ((JTextField) field(reloaded, "text")).setText("unsaved draft"); }
                 catch (Exception exception) { throw new RuntimeException(exception); }
             });
-            SwingUtilities.invokeLater(() -> ((JMenuItem) restartedMenu.getComponent(2)).doClick());
+            onEdt(() -> restartedCloseToTray.setSelected(false));
+            SwingUtilities.invokeLater(() -> frame.dispatchEvent(new WindowEvent(frame, WindowEvent.WINDOW_CLOSING)));
             waitFor(() -> dialog("CopyWords") != null, "unsaved exit prompt missing");
             onEdt(() -> button(dialog("CopyWords"), "取消").doClick());
             check(frame.isVisible() && !(Boolean) field(app, "exiting"), "canceling unsaved-exit prompt keeps app running");
+            TrayIcon restartedTray = (TrayIcon) field(app, "tray");
+            onEdt(() -> {
+                restartedCloseToTray.setSelected(true);
+                try {
+                    Field trayField = CopyWords.class.getDeclaredField("tray"); trayField.setAccessible(true); trayField.set(app, null);
+                } catch (Exception exception) { throw new RuntimeException(exception); }
+            });
+            SwingUtilities.invokeLater(() -> frame.dispatchEvent(new WindowEvent(frame, WindowEvent.WINDOW_CLOSING)));
+            waitFor(() -> dialog("CopyWords") != null, "missing tray did not fall back to exit prompt");
+            onEdt(() -> {
+                button(dialog("CopyWords"), "取消").doClick();
+                try {
+                    Field trayField = CopyWords.class.getDeclaredField("tray"); trayField.setAccessible(true); trayField.set(app, restartedTray);
+                } catch (Exception exception) { throw new RuntimeException(exception); }
+                restartedCloseToTray.setSelected(false);
+            });
+            check(frame.isVisible(), "unavailable tray uses safe exit flow and supports cancel");
             Files.writeString(Path.of("logs/ui-" + suffix + "-profile.txt"), home.toString());
             onEdt(() -> frame.setBounds(100, 90, 700, 480));
             Thread.sleep(200);
@@ -357,11 +409,26 @@ public class UiSmoke {
             }
             Files.write(Path.of("logs/ui-" + suffix + "-report.txt"), report, java.nio.charset.StandardCharsets.UTF_8);
         }
-        // Exit through the actual tray menu. CopyWords closes registrations, tray and file lock, then exits 0.
-        JPopupMenu trayMenu = (JPopupMenu) field(app, "trayMenu");
-        SwingUtilities.invokeLater(() -> ((JMenuItem) trayMenu.getComponent(2)).doClick());
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try {
+                check(!instance.isValid() && !channel.isOpen(), "actual exit releases instance lock and channel");
+                check(!((Thread) field(field(app, "hotkeys"), "thread")).isAlive(), "actual exit stops global hotkey thread");
+                check(!java.util.Arrays.asList(SystemTray.getSystemTray().getTrayIcons()).contains(field(app, "tray")), "actual exit removes tray icon");
+                Files.write(Path.of("logs/ui-" + suffix + "-report.txt"), report, java.nio.charset.StandardCharsets.UTF_8);
+            } catch (Exception | AssertionError exception) {
+                exception.printStackTrace();
+                try { Files.writeString(Path.of("logs/ui-" + suffix + "-exit-failure.txt"), exception.toString()); }
+                catch (Exception ignored) { }
+            }
+        }));
+        SwingUtilities.invokeLater(() -> frame.dispatchEvent(new WindowEvent(frame, WindowEvent.WINDOW_CLOSING)));
         waitFor(() -> dialog("CopyWords") != null, "discard-exit prompt missing");
-        onEdt(() -> button(dialog("CopyWords"), "丢弃并退出").doClick());
+        onEdt(() -> button(dialog("CopyWords"), saveOnExit ? "保存并退出" : "丢弃并退出").doClick());
+    }
+
+    static Object uncheckedField(Object object, String name) {
+        try { return field(object, name); }
+        catch (Exception exception) { throw new RuntimeException(exception); }
     }
 
     static JScrollPane findScroll(Container parent) {

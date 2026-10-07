@@ -30,7 +30,8 @@ public final class ConfigStore {
                 entries.add(new Entry(id, text, hotkey));
             }
             var config = new Config(entries, Boolean.parseBoolean(properties.getProperty("autoStart", "true")),
-                    Boolean.parseBoolean(properties.getProperty("startHidden", "true")));
+                    Boolean.parseBoolean(properties.getProperty("startHidden", "true")),
+                    Boolean.parseBoolean(properties.getProperty("closeToTray", "false")));
             config.validateLoaded();
             Config current = properties.containsKey("capsDefaultsVersion") ? config : config.upgradeLegacyDefaults();
             upgraded = !current.equals(config);
@@ -45,6 +46,7 @@ public final class ConfigStore {
         properties.setProperty("count", Integer.toString(config.entries().size()));
         properties.setProperty("autoStart", Boolean.toString(config.autoStart()));
         properties.setProperty("startHidden", Boolean.toString(config.startHidden()));
+        properties.setProperty("closeToTray", Boolean.toString(config.closeToTray()));
         for (int i = 0; i < config.entries().size(); i++) {
             var entry = config.entries().get(i);
             String prefix = "entry." + i + ".";

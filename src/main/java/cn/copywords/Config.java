@@ -3,14 +3,14 @@ package cn.copywords;
 import java.util.List;
 import java.util.HashSet;
 
-public record Config(List<Entry> entries, boolean autoStart, boolean startHidden) {
+public record Config(List<Entry> entries, boolean autoStart, boolean startHidden, boolean closeToTray) {
     public Config { entries = List.copyOf(entries); }
 
     public static Config defaults() {
         return new Config(List.of(Entry.create("AI4S", new Hotkey(Hotkey.CAPS, '1')),
                 Entry.create("人生价值", new Hotkey(Hotkey.CAPS, '2')),
                 Entry.create("xxx@example.com", new Hotkey(Hotkey.CAPS, '3')),
-                Entry.create("", null), Entry.create("", null)), true, true);
+                Entry.create("", null), Entry.create("", null)), true, true, false);
     }
 
     public Config upgradeLegacyDefaults() {
@@ -34,7 +34,7 @@ public record Config(List<Entry> entries, boolean autoStart, boolean startHidden
             if (replacement != null) reserved.add(replacement);
             result.set(i, new Entry(entry.id(), entry.text(), replacement));
         }
-        return new Config(result, autoStart, startHidden);
+        return new Config(result, autoStart, startHidden, closeToTray);
     }
 
     public void validate() {

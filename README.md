@@ -96,7 +96,7 @@
 - **配置原子保护**：保存失败时自动回滚，确保现有生效条目不受损害。
 
 ### 5. 🖥️ 无缝托盘驻留与多显示器自适应
-- 主界面关闭即最小化到系统托盘，内存与 CPU 占用极低。
+- 可选择关闭主界面后隐藏到系统托盘继续运行，内存与 CPU 占用极低。
 - 托盘右键菜单经过专门的字体抗锯齿与渲染优化，彻底根除 Java 在高版本 Windows 下可能出现的 AWT 中文方块乱码。
 - 自动记忆窗口尺寸、坐标与最大化状态；更换屏幕或分辨率时自动校正回可用工作区内。
 
@@ -167,7 +167,7 @@ flowchart LR
   <img src="https://img.shields.io/badge/Window%20Memory-Multi--Monitor%20Safe-orange" alt="Window Memory" />
 </p>
 
-- **关闭即托盘**：点击窗口右上角关闭按钮，程序默认隐藏至系统托盘继续服务。
+- **关闭行为可选**：默认不勾选“点击窗口关闭按钮时，隐藏到系统托盘继续运行（不勾选则退出程序）”，点击右上角关闭按钮会退出程序。勾选后，关闭窗口会隐藏到托盘继续服务；托盘不可用时仍走退出流程。勾选或取消立即影响本次关闭，点击“保存”后下次启动也会记住。隐藏窗口不会自动保存修改。
 - **右键菜单**：右键点击托盘图标可弹出菜单（包含“打开设置”与“退出”）。菜单支持按 `Escape` 键或点击其他区域自动关闭。
 - **重复启动保护**：当程序已在托盘运行时，再次双击运行将自动弹出提示并直接唤醒已存在的窗口。
 - **安全退出确认**：若有未保存的修改，退出前会弹出确认对话框供您选择“保存退出”、“丢弃修改退出”或“取消”。
@@ -225,10 +225,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run.ps1
 本项目拥有严苛的自动化测试套件（含单元测试与 Windows 原生模拟测试）：
 
 ```powershell
-# 运行常规测试（31项）
+# 运行常规测试（33项）
 mvn -B '-Dmaven.repo.local=temp/m2' test
 
-# 运行完整测试（含12项原生键鼠操作与剪贴板模拟测试，共43项）
+# 运行完整测试（含12项原生键鼠操作与剪贴板模拟测试，共45项）
 mvn -B '-Dmaven.repo.local=temp/m2' '-Dcopywords.windowsSmoke=true' test
 ```
 
@@ -242,9 +242,13 @@ mvn -B '-Dmaven.repo.local=temp/m2' '-Dcopywords.windowsSmoke=true' test
 java --enable-native-access=ALL-UNNAMED -cp dist/CopyWords.jar scripts/UiSmoke.java
 java --enable-native-access=ALL-UNNAMED -cp dist/CopyWords.jar scripts/WindowStateExitCheck.java
 
-# 150% 高分屏缩放 UI 校验
-java --enable-native-access=ALL-UNNAMED '-Dsun.java2d.uiScale=1.5' -cp dist/CopyWords.jar scripts/UiSmoke.java 150percent
-java --enable-native-access=ALL-UNNAMED -cp dist/CopyWords.jar scripts/WindowStateExitCheck.java 150percent
+# 150% 高分屏缩放 UI 校验，覆盖保存并退出
+java --enable-native-access=ALL-UNNAMED '-Dsun.java2d.uiScale=1.5' -cp dist/CopyWords.jar scripts/UiSmoke.java 150percent save
+java --enable-native-access=ALL-UNNAMED -cp dist/CopyWords.jar scripts/WindowStateExitCheck.java 150percent save
+
+# 无修改时直接关闭，以及勾选托盘运行时从托盘菜单退出
+java --enable-native-access=ALL-UNNAMED -cp dist/CopyWords.jar scripts/CloseExitSmoke.java
+java --enable-native-access=ALL-UNNAMED -cp dist/CopyWords.jar scripts/CloseExitSmoke.java tray
 ```
 
 相关验收报告详见：
@@ -264,4 +268,3 @@ java --enable-native-access=ALL-UNNAMED -cp dist/CopyWords.jar scripts/WindowSta
   - Windows Run Registry Key 用于开机自启托管
 - **开源协议**：本项目基于 **GNU General Public License v3.0** 许可证开源，详见 [LICENSE](LICENSE)。
 - **开发与历史备忘**：重构前的原始说明及开发备忘请查阅 [dev_log.md](dev_log.md)。
-

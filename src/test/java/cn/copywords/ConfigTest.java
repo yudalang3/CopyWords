@@ -14,6 +14,7 @@ class ConfigTest {
 
     @Test void initialEntriesAndDefaultAllocation() {
         Config config = Config.defaults();
+        assertFalse(config.closeToTray());
         assertEquals(5, config.entries().size());
         assertEquals("人生价值", config.entries().get(1).text());
         assertEquals(new Hotkey(Hotkey.CAPS, '4'), Hotkey.nextDefault(config.entries()));
@@ -45,9 +46,9 @@ class ConfigTest {
 
     @Test void duplicateAndMultilineRowsAreRejected() {
         var key = new Hotkey(Hotkey.ALT, '1');
-        var duplicate = new Config(List.of(Entry.create("a", key), Entry.create("b", key)), false, false);
+        var duplicate = new Config(List.of(Entry.create("a", key), Entry.create("b", key)), false, false, false);
         assertTrue(assertThrows(IllegalArgumentException.class, duplicate::validate).getMessage().contains("第 2 行"));
-        var multiline = new Config(List.of(Entry.create("第一行\n第二行", key)), false, false);
+        var multiline = new Config(List.of(Entry.create("第一行\n第二行", key)), false, false, false);
         assertThrows(IllegalArgumentException.class, multiline::validate);
         assertFalse(Entry.create("", key).active());
         assertFalse(Entry.create("内容", null).active());
@@ -56,7 +57,7 @@ class ConfigTest {
 
     @Test void orderedUnicodeAndSpacesRoundTrip() throws Exception {
         var original = new Config(List.of(Entry.create("  人生价值 & <AI4S>  ", new Hotkey(3, 'Z')),
-                Entry.create("", null), Entry.create("email@example.com", null)), false, true);
+                Entry.create("", null), Entry.create("email@example.com", null)), false, true, false);
         var store = new ConfigStore(directory.resolve("config.xml"));
         store.save(original);
         assertEquals(original, store.load());
@@ -68,10 +69,33 @@ class ConfigTest {
         var previous = Config.defaults(); store.save(previous);
         byte[] original = Files.readAllBytes(directory.resolve("config.xml"));
         var key = new Hotkey(Hotkey.ALT, '1');
-        var invalid = new Config(List.of(Entry.create("x", key), Entry.create("y", key)), false, false);
+        var invalid = new Config(List.of(Entry.create("x", key), Entry.create("y", key)), false, false, false);
         assertThrows(IllegalArgumentException.class, () -> store.save(invalid));
         assertArrayEquals(original, Files.readAllBytes(directory.resolve("config.xml")));
         assertEquals(previous, store.load());
+    }
+
+    @Test void closeToTrayPreferenceRoundTripsBothStates() throws Exception {
+        var store = new ConfigStore(directory.resolve("config.xml"));
+        for (boolean closeToTray : new boolean[] {true, false}) {
+            var config = new Config(Config.defaults().entries(), false, true, closeToTray);
+            store.save(config);
+            assertEquals(config, store.load());
+        }
+    }
+
+    @Test void missingCloseToTrayPreferenceDefaultsToFalseWithoutRewritingFile() throws Exception {
+        Path path = directory.resolve("config.xml");
+        var store = new ConfigStore(path);
+        store.save(new Config(Config.defaults().entries(), false, true, true));
+        var properties = new Properties();
+        try (var input = Files.newInputStream(path)) { properties.loadFromXML(input); }
+        properties.remove("closeToTray");
+        try (var output = Files.newOutputStream(path)) { properties.storeToXML(output, "legacy", "UTF-8"); }
+        byte[] original = Files.readAllBytes(path);
+        assertFalse(store.load().closeToTray());
+        assertFalse(store.upgraded());
+        assertArrayEquals(original, Files.readAllBytes(path));
     }
 
     @Test void corruptConfigIsReportedWithoutOverwrite() throws Exception {
@@ -84,7 +108,7 @@ class ConfigTest {
     @Test void reservedPasteShortcutIsRejectedOnSaveButLegacyFileIsPreserved() throws Exception {
         var path = directory.resolve("config.xml");
         var store = new ConfigStore(path);
-        var config = new Config(List.of(Entry.create("preserved", new Hotkey(Hotkey.CTRL, 'V'))), false, false);
+        var config = new Config(List.of(Entry.create("preserved", new Hotkey(Hotkey.CTRL, 'V'))), false, false, false);
         assertTrue(assertThrows(IllegalArgumentException.class, config::validate).getMessage().contains("Ctrl + V"));
         var properties = new Properties();
         properties.setProperty("count", "1"); properties.setProperty("capsDefaultsVersion", "2");
@@ -98,14 +122,14 @@ class ConfigTest {
         assertArrayEquals(original, Files.readAllBytes(path));
         assertThrows(IllegalArgumentException.class, () -> store.save(config));
         assertArrayEquals(original, Files.readAllBytes(path));
-        new Config(List.of(Entry.create("allowed", new Hotkey(Hotkey.CAPS | Hotkey.CTRL, 'V'))), false, false).validate();
+        new Config(List.of(Entry.create("allowed", new Hotkey(Hotkey.CAPS | Hotkey.CTRL, 'V'))), false, false, false).validate();
     }
 
     @Test void legacyDefaultsUpgradeWithoutChangingTextOrCustomBindings() throws Exception {
         var custom = new Hotkey(Hotkey.CTRL | Hotkey.SHIFT | Hotkey.ALT, '1');
         var legacy = new Config(List.of(Entry.create("my first text", new Hotkey(Hotkey.ALT, '1')),
                 Entry.create("中文", new Hotkey(6, '2')), Entry.create("mail", new Hotkey(Hotkey.ALT, '3')),
-                Entry.create("custom", custom), Entry.create("next", new Hotkey(Hotkey.ALT, '2'))), true, false);
+                Entry.create("custom", custom), Entry.create("next", new Hotkey(Hotkey.ALT, '2'))), true, false, true);
         var path = directory.resolve("config.xml");
         new ConfigStore(path).save(legacy);
         var properties = new Properties();
@@ -115,6 +139,7 @@ class ConfigTest {
         byte[] original = Files.readAllBytes(path);
         var store = new ConfigStore(path); var upgraded = store.load();
         assertTrue(store.upgraded());
+        assertTrue(upgraded.closeToTray());
         assertEquals(new Hotkey(Hotkey.CAPS, '1'), upgraded.entries().get(0).hotkey());
         assertEquals(new Hotkey(Hotkey.CAPS, '2'), upgraded.entries().get(1).hotkey());
         assertEquals(new Hotkey(Hotkey.CAPS, '3'), upgraded.entries().get(2).hotkey());
