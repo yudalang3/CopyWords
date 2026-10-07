@@ -7,10 +7,11 @@ import java.util.List;
 public record Hotkey(int modifiers, int key) {
     public static final int ALT = 1, CTRL = 2, SHIFT = 4, CAPS = 8;
     public static final String PASTE_ADVICE = "Ctrl + V 用于自动粘贴，请选择其他快捷键";
+    public static final String LEFT_ALT_ADVICE = "Alt 快捷键仅支持左 Alt，请使用左 Alt 或 Caps 组合";
 
     public Hotkey {
         if (modifiers < 1 || modifiers > 15 || !supported(key))
-            throw new IllegalArgumentException("请使用 Caps / Ctrl / Shift / Alt 加字母、数字或 F1–F11");
+            throw new IllegalArgumentException("请使用 Caps / Ctrl / Shift / 左 Alt 加字母、数字或 F1–F11");
     }
 
     public static boolean supported(int key) {
@@ -19,8 +20,13 @@ public record Hotkey(int modifiers, int key) {
     }
 
     public static Hotkey from(KeyEvent event) {
-        if (event.isMetaDown() || event.isAltGraphDown())
-            throw new IllegalArgumentException("请使用 Caps / Ctrl / Shift / Alt 组合键");
+        return from(event, false);
+    }
+
+    public static Hotkey from(KeyEvent event, boolean rightAltDown) {
+        if (rightAltDown || event.isAltGraphDown()) throw new IllegalArgumentException(LEFT_ALT_ADVICE);
+        if (event.isMetaDown())
+            throw new IllegalArgumentException("请使用 Caps / Ctrl / Shift / 左 Alt 组合键");
         int modifiers = (event.isAltDown() ? ALT : 0) | (event.isControlDown() ? CTRL : 0)
                 | (event.isShiftDown() ? SHIFT : 0);
         return new Hotkey(modifiers, event.getKeyCode());
@@ -40,7 +46,7 @@ public record Hotkey(int modifiers, int key) {
         return ((modifiers & CAPS) != 0 ? "Caps + " : "")
                 + ((modifiers & CTRL) != 0 ? "Ctrl + " : "")
                 + ((modifiers & SHIFT) != 0 ? "Shift + " : "")
-                + ((modifiers & ALT) != 0 ? "Alt + " : "") + KeyEvent.getKeyText(key);
+                + ((modifiers & ALT) != 0 ? "左 Alt + " : "") + KeyEvent.getKeyText(key);
     }
 
     public boolean usesCaps() { return (modifiers & CAPS) != 0; }

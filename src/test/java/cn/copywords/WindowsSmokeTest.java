@@ -81,17 +81,19 @@ class WindowsSmokeTest {
             } catch (Exception | AssertionError exception) { close(); throw exception; }
         }
         void focus() throws Exception {
-            SwingUtilities.invokeAndWait(() -> { frame.toFront(); text.requestFocusInWindow(); });
+            SwingUtilities.invokeAndWait(() -> { frame.setAlwaysOnTop(true); frame.toFront(); text.requestFocusInWindow(); });
             HWND window = new HWND(Native.getWindowPointer(frame));
             User32.INSTANCE.SetForegroundWindow(window);
-            waitFor(() -> window.equals(User32.INSTANCE.GetForegroundWindow()));
             var position = new AtomicReference<Point>();
             SwingUtilities.invokeAndWait(() -> position.set(text.getLocationOnScreen()));
             var robot = new Robot();
             robot.mouseMove(position.get().x + 30, position.get().y + 25);
             robot.mousePress(java.awt.event.InputEvent.BUTTON1_DOWN_MASK);
             robot.mouseRelease(java.awt.event.InputEvent.BUTTON1_DOWN_MASK);
+            // Windows may deny SetForegroundWindow; our owned editor's click obtains focus.
+            waitFor(() -> window.equals(User32.INSTANCE.GetForegroundWindow()));
             waitFor(() -> InputSimulator.target().known());
+            SwingUtilities.invokeAndWait(() -> frame.setAlwaysOnTop(false));
         }
         public void close() throws Exception {
             SwingUtilities.invokeAndWait(frame::dispose);
@@ -109,7 +111,7 @@ class WindowsSmokeTest {
         try (var editor = new Editor(); var clipboard = new ClipboardService(notices::add);
              var hotkeys = new GlobalHotkeys(request -> { count.incrementAndGet(); clipboard.paste(request); })) {
             assertTrue(hotkeys.start(config).isEmpty());
-            int[][] variants = {{0xA4, '7'}, {0xA5, '7'}, {0xA2, 0xA0, '8'}, {0xA3, 0xA1, '8'},
+            int[][] variants = {{0xA4, '7'}, {0xA2, 0xA0, '8'}, {0xA3, 0xA1, '8'},
                     {0x14, 0xA2, '9'}, {0x14, 0xA3, '9'}};
             String expected = "";
             for (int[] variant : variants) {
@@ -136,6 +138,31 @@ class WindowsSmokeTest {
                 key('X', true); key('X', false); expected += "x";
                 String withLetter = expected; waitFor(() -> editorText(editor.text).equals(withLetter));
             }
+        }
+    }
+
+    @Test void altBindingsAndCaptureAcceptOnlyLeftAltEvenAfterFastRelease() throws Exception {
+        var requests = new LinkedBlockingQueue<PasteRequest>(); var captured = new LinkedBlockingQueue<Hotkey>();
+        var config = new Config(List.of(Entry.create("A", new Hotkey(Hotkey.ALT, '7')),
+                Entry.create("B", new Hotkey(Hotkey.CAPS | Hotkey.ALT, '9'))), false, false);
+        try (var editor = new Editor(); var hotkeys = new GlobalHotkeys(requests::add)) {
+            assertTrue(hotkeys.start(config).isEmpty());
+            key(0xA5, true); key('7', true); key('7', false); key(0xA5, false);
+            assertNull(requests.poll(200, TimeUnit.MILLISECONDS));
+            key(0xA4, true); key('7', true); key('7', false); key(0xA4, false);
+            assertEquals("A", requests.poll(3, TimeUnit.SECONDS).text());
+            key(0xA4, true); key(0xA5, true); key('7', true); key('7', false); key(0xA5, false); key(0xA4, false);
+            assertNull(requests.poll(200, TimeUnit.MILLISECONDS));
+            key(0x14, true); key(0xA5, true); key('9', true); key('9', false); key(0xA5, false); key(0x14, false);
+            assertNull(requests.poll(200, TimeUnit.MILLISECONDS));
+            key(0x14, true); key(0xA4, true); key('9', true); key('9', false); key(0xA4, false); key(0x14, false);
+            assertEquals("B", requests.poll(3, TimeUnit.SECONDS).text());
+            hotkeys.pause(); hotkeys.capture(captured::add);
+            key(0x14, true); key(0xA5, true); key('9', true); key('9', false); key(0xA5, false); key(0x14, false);
+            assertNull(captured.poll(200, TimeUnit.MILLISECONDS));
+            key(0x14, true); key(0xA4, true); key('9', true); key('9', false); key(0xA4, false); key(0x14, false);
+            assertEquals(new Hotkey(Hotkey.CAPS | Hotkey.ALT, '9'), captured.poll(3, TimeUnit.SECONDS));
+            hotkeys.capture(null);
         }
     }
 
@@ -230,7 +257,7 @@ class WindowsSmokeTest {
                 assertTrue(service.start(defaultConfig).isEmpty());
                 press(0xA4, '1');
                 assertNotNull(notices.poll(3, TimeUnit.SECONDS)); assertEquals("AI4S", clipboardText());
-                press(0xA5, '3');
+                press(0xA4, '3');
                 assertNotNull(notices.poll(3, TimeUnit.SECONDS)); assertEquals("xxx@example.com", clipboardText());
                 key(0xA2, true); key(0xA0, true);
                 try { key('2', true); key('2', false); }

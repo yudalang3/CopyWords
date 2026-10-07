@@ -5,6 +5,8 @@ import com.sun.jna.platform.win32.*;
 import com.sun.jna.platform.win32.WinDef.*;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Consumer;
 import java.util.function.BiConsumer;
 
@@ -18,6 +20,8 @@ final class CapsHotkeys implements AutoCloseable {
     private volatile Consumer<Hotkey> capture;
     private volatile boolean paused;
     private volatile Set<Integer> heldKeys = Set.of();
+    private record AltPress(long time, boolean leftOnly) { }
+    private final Map<Hotkey, ConcurrentLinkedQueue<AltPress>> altPresses = new ConcurrentHashMap<>();
     private final Thread thread;
     private WinUser.HHOOK hook;
     private int threadId;
@@ -44,10 +48,18 @@ final class CapsHotkeys implements AutoCloseable {
         thread.setDaemon(true); thread.start(); ready.join();
     }
 
-    void update(Map<Hotkey, String> bindings) { this.bindings = Map.copyOf(bindings); }
-    void pause(boolean paused) { this.paused = paused; }
+    void update(Map<Hotkey, String> bindings) { this.bindings = Map.copyOf(bindings); altPresses.clear(); }
+    void pause(boolean paused) { this.paused = paused; altPresses.clear(); }
     void capture(Consumer<Hotkey> listener) { capture = listener; }
     boolean isKeyDown(int key) { return heldKeys.contains(key); }
+    boolean takeLeftAltPress(Hotkey key) {
+        var presses = altPresses.get(key);
+        if (presses == null) return false;
+        AltPress press;
+        while ((press = presses.poll()) != null)
+            if (System.nanoTime() - press.time() < 1_000_000_000L) return press.leftOnly();
+        return false;
+    }
 
     private LRESULT next(int code, WPARAM event, WinUser.KBDLLHOOKSTRUCT key) {
         return User32.INSTANCE.CallNextHookEx(hook, code, event, new LPARAM(Pointer.nativeValue(key.getPointer())));
@@ -62,8 +74,26 @@ final class CapsHotkeys implements AutoCloseable {
             boolean wasDown = downKeys.contains(vk);
             if (down) downKeys.add(vk); else downKeys.remove(vk);
             heldKeys = Set.copyOf(downKeys);
+            // MOD_ALT merges both sides. Preserve each press until WM_HOTKEY is dispatched,
+            // including quick releases; checking only the current key state loses that identity.
+            if (!capsHeld && !paused && capture == null && down && !wasDown && Hotkey.supported(vk)
+                    && pressed(0xA4, 0xA5, 0x12) && !downKeys.contains(0x5B) && !downKeys.contains(0x5C)) {
+                int modifiers = Hotkey.ALT | (pressed(0xA2, 0xA3, 0x11) ? Hotkey.CTRL : 0)
+                        | (pressed(0xA0, 0xA1, 0x10) ? Hotkey.SHIFT : 0);
+                var hotkey = new Hotkey(modifiers, vk);
+                if (bindings.containsKey(hotkey)) {
+                    var press = new AltPress(System.nanoTime(), downKeys.contains(0xA4) && !downKeys.contains(0xA5));
+                    LRESULT result = next(code, event, key);
+                    if (result.longValue() == 0) {
+                        var presses = altPresses.computeIfAbsent(hotkey, ignored -> new ConcurrentLinkedQueue<>());
+                        presses.removeIf(old -> press.time() - old.time() >= 1_000_000_000L);
+                        presses.add(press);
+                    }
+                    return result;
+                }
+            }
             if (vk == 0x14) {
-                if (down && !wasDown && (capture != null || !paused && !bindings.isEmpty())) {
+                if (down && !wasDown && (capture != null || !paused && bindings.keySet().stream().anyMatch(Hotkey::usesCaps))) {
                     capsHeld = true; capsUsed = false;
                 }
                 if (capsHeld) {
@@ -81,11 +111,12 @@ final class CapsHotkeys implements AutoCloseable {
             }
             if (capsHeld && down) {
                 capsUsed = true;
+                if (downKeys.contains(0xA5)) return next(code, event, key);
                 if (Hotkey.supported(vk) && !downKeys.contains(0x5B) && !downKeys.contains(0x5C)) {
                     int modifiers = Hotkey.CAPS
                             | (pressed(0xA2, 0xA3, 0x11) ? Hotkey.CTRL : 0)
                             | (pressed(0xA0, 0xA1, 0x10) ? Hotkey.SHIFT : 0)
-                            | (pressed(0xA4, 0xA5, 0x12) ? Hotkey.ALT : 0);
+                            | (downKeys.contains(0xA4) ? Hotkey.ALT : 0);
                     Hotkey hotkey = new Hotkey(modifiers, vk);
                     Consumer<Hotkey> listener = capture;
                     String text = bindings.get(hotkey);

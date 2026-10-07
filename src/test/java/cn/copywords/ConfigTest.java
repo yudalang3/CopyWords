@@ -30,6 +30,12 @@ class ConfigTest {
         assertEquals(new Hotkey(Hotkey.CTRL | Hotkey.SHIFT, '2'), Hotkey.from(event));
         assertEquals("Ctrl + Shift + 2", Hotkey.from(event).toString());
         assertEquals(0x7A, new Hotkey(Hotkey.ALT, KeyEvent.VK_F11).key());
+        assertEquals("左 Alt + F11", new Hotkey(Hotkey.ALT, KeyEvent.VK_F11).toString());
+        var alt = new KeyEvent(new Canvas(), KeyEvent.KEY_PRESSED, 0,
+                KeyEvent.ALT_DOWN_MASK, KeyEvent.VK_7, '7');
+        assertEquals(new Hotkey(Hotkey.ALT, '7'), Hotkey.from(alt, false));
+        assertEquals(Hotkey.LEFT_ALT_ADVICE,
+                assertThrows(IllegalArgumentException.class, () -> Hotkey.from(alt, true)).getMessage());
         assertThrows(IllegalArgumentException.class, () -> new Hotkey(0, 'A'));
         assertEquals("Caps + A", new Hotkey(8, 'A').toString());
         assertThrows(IllegalArgumentException.class, () -> new Hotkey(16, 'A'));

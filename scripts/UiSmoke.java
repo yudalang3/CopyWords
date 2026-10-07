@@ -71,12 +71,35 @@ public class UiSmoke {
         check("capture sentinel".equals(Toolkit.getDefaultToolkit().getSystemClipboard().getData(DataFlavor.stringFlavor)),
                 "hotkeys paused during capture");
         if (outcome.equals("确定")) {
+            rightAlt(true);
+            try { robot.keyPress(KeyEvent.VK_7); robot.keyRelease(KeyEvent.VK_7); }
+            finally { rightAlt(false); }
+            Thread.sleep(150);
+            onEdt(() -> button(dialog("设置快捷键"), "确定").doClick());
+            check(dialog("设置快捷键") != null, "right Alt capture cannot confirm a previous candidate");
+            robot.keyPress(KeyEvent.VK_ALT); robot.keyPress(KeyEvent.VK_7);
+            robot.keyRelease(KeyEvent.VK_7); robot.keyRelease(KeyEvent.VK_ALT);
+            Thread.sleep(150);
+            var recorded = new AtomicReference<String>();
+            onEdt(() -> recorded.set(((JLabel) dialog("设置快捷键").getContentPane().getComponent(1)).getText()));
+            check("左 Alt + 7".equals(recorded.get()), "left Alt capture displays its physical side");
             robot.keyPress(KeyEvent.VK_CONTROL); robot.keyPress(KeyEvent.VK_SHIFT); robot.keyPress(KeyEvent.VK_4);
             robot.keyRelease(KeyEvent.VK_4); robot.keyRelease(KeyEvent.VK_SHIFT); robot.keyRelease(KeyEvent.VK_CONTROL);
             Thread.sleep(150);
         }
         onEdt(() -> button(dialog("设置快捷键"), outcome).doClick());
         waitFor(() -> dialog("设置快捷键") == null, "capture did not close");
+    }
+    static void rightAlt(boolean down) {
+        var input = new WinUser.INPUT();
+        input.type = new DWORD(WinUser.INPUT.INPUT_KEYBOARD);
+        input.input.setType("ki"); input.input.ki = new WinUser.KEYBDINPUT();
+        input.input.ki.wVk = new WORD(0); input.input.ki.wScan = new WORD(0x38);
+        input.input.ki.dwFlags = new DWORD(WinUser.KEYBDINPUT.KEYEVENTF_SCANCODE
+                | WinUser.KEYBDINPUT.KEYEVENTF_EXTENDEDKEY | (down ? 0 : WinUser.KEYBDINPUT.KEYEVENTF_KEYUP));
+        input.input.ki.time = new DWORD(0); input.input.ki.dwExtraInfo = new BaseTSD.ULONG_PTR(0);
+        if (User32.INSTANCE.SendInput(new DWORD(1), new WinUser.INPUT[] {input}, input.size()).intValue() != 1)
+            throw new AssertionError("could not simulate right Alt");
     }
     static void screenshot(String suffix) throws Exception {
         onEdt(() -> {

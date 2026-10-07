@@ -43,7 +43,12 @@ public final class GlobalHotkeys implements AutoCloseable {
                     } else if (message.message == WinUser.WM_HOTKEY && !suspended) {
                         int id = message.wParam.intValue();
                         for (var binding : bindings.values()) {
-                            if (binding.registered && binding.id == id) { trigger(binding.entry.hotkey(), binding.entry.text()); break; }
+                            if (binding.registered && binding.id == id) {
+                                Hotkey key = binding.entry.hotkey();
+                                if ((key.modifiers() & Hotkey.ALT) == 0 || caps.takeLeftAltPress(key))
+                                    trigger(key, binding.entry.text());
+                                break;
+                            }
                         }
                     }
                 }
@@ -118,10 +123,13 @@ public final class GlobalHotkeys implements AutoCloseable {
     private void publishCaps() {
         var entries = new LinkedHashMap<Hotkey, String>();
         for (var binding : bindings.values())
-            if (binding.registered && binding.entry.hotkey().usesCaps()) entries.put(binding.entry.hotkey(), binding.entry.text());
+            if (binding.registered && (binding.entry.hotkey().usesCaps()
+                    || (binding.entry.hotkey().modifiers() & Hotkey.ALT) != 0))
+                entries.put(binding.entry.hotkey(), binding.entry.text());
         caps.update(entries);
     }
     public void capture(Consumer<Hotkey> listener) { caps.capture(listener); }
+    public boolean rightAltDown() { return caps.isKeyDown(0xA5); }
     private void unregister(Binding binding) {
         if (binding.registered && !binding.entry.hotkey().usesCaps()) User32.INSTANCE.UnregisterHotKey(null, binding.id);
         binding.registered = false;

@@ -81,7 +81,7 @@ public final class CopyWords {
         JLabel title = new JLabel("CopyWords");
         title.setFont(title.getFont().deriveFont(Font.BOLD, 28));
         heading.add(title, BorderLayout.NORTH);
-        heading.add(new JLabel("按快捷键自动复制并粘贴；Ctrl / Shift / Alt 组合请松开按键。"), BorderLayout.SOUTH);
+        heading.add(new JLabel("按快捷键自动复制并粘贴；Ctrl / Shift / 左 Alt 组合请松开按键。"), BorderLayout.SOUTH);
         content.add(heading, BorderLayout.NORTH);
 
         JPanel list = new JPanel(new BorderLayout(0, 8));
@@ -240,7 +240,8 @@ public final class CopyWords {
         catch (Exception exception) { clipboard.resume(); showError(exception.getMessage()); return; }
         var dialog = new JDialog(frame, "设置快捷键", true);
         var candidate = new Hotkey[] { row.hotkey };
-        JLabel hint = new JLabel("按住 Caps / Ctrl / Shift / Alt，再按字母、数字或 F1–F11");
+        var invalid = new boolean[1];
+        JLabel hint = new JLabel("按住 Caps / Ctrl / Shift / 左 Alt，再按字母、数字或 F1–F11");
         JLabel value = new JLabel(row.hotkey == null ? "尚未设置" : row.hotkey.toString(), SwingConstants.CENTER);
         value.setFont(value.getFont().deriveFont(Font.BOLD, 22));
         JPanel center = new JPanel(new BorderLayout(0, 22));
@@ -251,6 +252,7 @@ public final class CopyWords {
         clear.addActionListener(event -> { row.hotkey = null; row.refresh(); dialog.dispose(); });
         cancel.addActionListener(event -> dialog.dispose());
         accept.addActionListener(event -> {
+            if (invalid[0]) { hint.setText(Hotkey.LEFT_ALT_ADVICE); return; }
             if (candidate[0] != null && candidate[0].reservedForPaste()) {
                 hint.setText(Hotkey.PASTE_ADVICE); return;
             }
@@ -266,12 +268,19 @@ public final class CopyWords {
             if (!dialog.isShowing() || event.getID() != KeyEvent.KEY_PRESSED) return false;
             int code = event.getKeyCode();
             if (code == KeyEvent.VK_ESCAPE) { dialog.dispose(); return true; }
+            if (code == KeyEvent.VK_ALT_GRAPH || code == KeyEvent.VK_ALT && event.getKeyLocation() == KeyEvent.KEY_LOCATION_RIGHT) {
+                invalid[0] = true; hint.setText(Hotkey.LEFT_ALT_ADVICE); return true;
+            }
             if (code == KeyEvent.VK_ALT || code == KeyEvent.VK_CONTROL || code == KeyEvent.VK_SHIFT) return true;
             try {
-                candidate[0] = Hotkey.from(event);
+                candidate[0] = Hotkey.from(event, hotkeys.rightAltDown());
+                invalid[0] = false;
                 value.setText(candidate[0].toString());
                 hint.setText("点击“确定”设置，点击主窗口“保存”后生效");
-            } catch (IllegalArgumentException exception) { hint.setText(exception.getMessage()); }
+            } catch (IllegalArgumentException exception) {
+                if (hotkeys.rightAltDown() || event.isAltGraphDown()) invalid[0] = true;
+                hint.setText(exception.getMessage());
+            }
             return true;
         };
         KeyboardFocusManager manager = KeyboardFocusManager.getCurrentKeyboardFocusManager();
@@ -279,6 +288,7 @@ public final class CopyWords {
         hotkeys.capture(key -> SwingUtilities.invokeLater(() -> {
             if (!dialog.isShowing()) return;
             candidate[0] = key; value.setText(key.toString());
+            invalid[0] = false;
             hint.setText("点击“确定”设置，点击主窗口“保存”后生效");
         }));
         try { dialog.setVisible(true); }
