@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/Java-25-ED8B00?logo=openjdk&logoColor=white" alt="Java 25" />
   <img src="https://img.shields.io/badge/GUI-Java%20Swing-007396" alt="Java Swing" />
   <img src="https://img.shields.io/badge/Native-JNA%205.19.1-blue" alt="JNA 5.19.1" />
-  <img src="https://img.shields.io/badge/License-Apache%202.0-green" alt="License" />
+  <img src="https://img.shields.io/badge/License-GPLv3-blue" alt="License" />
 </p>
 
 ---
@@ -262,6 +262,6 @@ java --enable-native-access=ALL-UNNAMED -cp dist/CopyWords.jar scripts/WindowSta
   - 低级键盘钩子（Low-Level Keyboard Hook）用于 Caps 组合键精准截获与修饰键状态判定
   - Windows `RegisterHotKey` API 用于标准全局组合键注册与冲突探测
   - Windows Run Registry Key 用于开机自启托管
-- **开源协议**：本项目基于 **Apache License 2.0** 许可证开源。
+- **开源协议**：本项目基于 **GNU General Public License v3.0** 许可证开源，详见 [LICENSE](LICENSE)。
 - **开发与历史备忘**：重构前的原始说明及开发备忘请查阅 [dev_log.md](dev_log.md)。
 
