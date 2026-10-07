@@ -11,7 +11,7 @@ public class CapsPasteProbe {
         try (var clipboard = new ClipboardService(message -> {
             try { Files.writeString(signals.resolve("copied.txt"), message); }
             catch (Exception exception) { throw new RuntimeException(exception); }
-        }); var hotkeys = new GlobalHotkeys(clipboard::copy);
+        }); var hotkeys = new GlobalHotkeys(clipboard::paste);
              var watcher = signals.getFileSystem().newWatchService()) {
             signals.register(watcher, StandardWatchEventKinds.ENTRY_CREATE, StandardWatchEventKinds.ENTRY_MODIFY);
             var warnings = hotkeys.start(Config.defaults());

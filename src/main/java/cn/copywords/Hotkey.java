@@ -6,6 +6,7 @@ import java.util.List;
 
 public record Hotkey(int modifiers, int key) {
     public static final int ALT = 1, CTRL = 2, SHIFT = 4, CAPS = 8;
+    public static final String PASTE_ADVICE = "Ctrl + V 用于自动粘贴，请选择其他快捷键";
 
     public Hotkey {
         if (modifiers < 1 || modifiers > 15 || !supported(key))
@@ -43,4 +44,5 @@ public record Hotkey(int modifiers, int key) {
     }
 
     public boolean usesCaps() { return (modifiers & CAPS) != 0; }
+    public boolean reservedForPaste() { return modifiers == CTRL && key == 'V'; }
 }

@@ -1,6 +1,6 @@
 # CopyWords
 
-用 Java 25 和 Swing 编写的 Windows 常用文本快捷复制工具。
+用 Java 25 和 Swing 编写的 Windows 常用文本快捷粘贴工具。
 
 ## 启动与使用
 
@@ -10,9 +10,17 @@
 2. 点击左侧快捷键按钮，然后按住 Caps／Ctrl／Shift／Alt，再按字母、数字或 F1–F11，点击“确定”。也可清除快捷键或取消设置。
 3. 点击“+ 添加”增加条目，点击每行“删除”移除条目。
 4. 点击“保存”让所有修改生效。保存失败会标出出错的行并说明原因，上次生效的内容仍可使用。
-5. 在任何其他应用中按对应快捷键，将文本复制到剪贴板，再按 Ctrl+V 粘贴。
+5. 在目标应用的输入框中按对应快捷键，松开触发主键和 Ctrl／Shift／Alt 等修饰键，程序自动复制并发送 Ctrl+V，无需再手动粘贴。
 
-默认有五行：Caps+1 对应 AI4S，Caps+2 对应人生价值，Caps+3 对应 xxx@example.com，另外两行空白。新增条目优先使用本应用尚未分配的 Caps+1～9、0。Caps 组合需要按住 Caps，再按数字；松开后按 Ctrl+V 粘贴。独立按 Caps 仍可切换大小写，组合复制不会切换。左右 Alt 都可以用于自定义组合。空文本或没有快捷键的条目不会注册快捷键。
+默认有五行：Caps+1 对应 AI4S，Caps+2 对应人生价值，Caps+3 对应 xxx@example.com，另外两行空白。新增条目优先使用本应用尚未分配的 Caps+1～9、0。Caps 组合需要按住 Caps，再按数字；松开数字后自动粘贴，Caps 可以继续按住。独立按 Caps 仍可切换大小写，组合不会切换。左右 Alt 都可以用于自定义组合。空文本或没有快捷键的条目不会注册快捷键。
+
+自动粘贴后，文本保留在剪贴板中供再次手动粘贴。连续触发按顺序处理；每条请求从触发起最多等待1秒，超时会取消并提示。切换前台窗口或可识别的焦点、进入快捷键录制或退出时，未发送的请求会取消；剪贴板被其他程序替换时，保留外部内容并取消待发送请求。
+
+**Ctrl+V 保留给粘贴，不能设置为条目的快捷键。** 已有配置中的 Ctrl+V 条目保留文本和设置，但启动时跳过注册并提示修改，其余条目继续工作。
+
+状态“已复制并发送粘贴命令”表示输入事件已发送，实际是否接受由目标应用决定。普通权限程序不能向更高权限窗口注入输入；自动粘贴失败时请检查剪贴板后手动粘贴。无法确认目标时仅复制。部分终端或控件不以 Ctrl+V 粘贴；浏览器同一窗口中的输入框切换、光标移动及输入法候选状态也不能完整识别，应在目标输入框稳定聚焦时触发。
+
+本机验收发现：外部右 Alt 语音/快捷键监听会拦截组合；中文输入法启用的 Swing 文本框中，右 Alt 组合可能已发送 Ctrl+V 却没有插入。遇到这种情况请改用 Caps 组合或手动粘贴；关闭外部监听、输入法关闭的隔离控件已通过左右修饰键验收。
 
 ## 托盘和自启动
 
@@ -48,7 +56,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run.ps1
 
 ## 测试
 
-普通构建运行十八项自动测试，另有五项 Windows 原生操作测试默认跳过。以下命令运行全部二十三项测试：
+普通构建运行31项自动测试，另有11项 Windows 原生操作测试默认跳过。以下命令运行全部42项测试；需要桌面已解锁且没有屏保：
 
 ```powershell
 mvn -B '-Dmaven.repo.local=temp/m2' '-Dcopywords.windowsSmoke=true' test
@@ -65,7 +73,7 @@ java --enable-native-access=ALL-UNNAMED '-Dsun.java2d.uiScale=1.5' -cp dist/Copy
 java --enable-native-access=ALL-UNNAMED -cp dist/CopyWords.jar scripts/WindowStateExitCheck.java 150percent
 ```
 
-截图和报告放在 `logs` 下。窗口与托盘修复验收见 `logs/window-state-verification.md`，之前的快捷键验收见 `logs/caps-verification.md`。界面测试还会检查托盘右键事件、菜单 Escape、窗口尺寸与位置、最大化恢复，以及丢弃退出后的配置隔离。
+截图和报告放在 `logs` 下。自动粘贴验收及未验证场景见 `logs/auto-paste-verification.md`。窗口与托盘修复验收见 `logs/window-state-verification.md`，之前的快捷键验收见 `logs/caps-verification.md`。界面测试还会检查托盘右键事件、菜单 Escape、窗口尺寸与位置、最大化恢复，以及丢弃退出后的配置隔离。
 
 ## 项目文件与依赖
 

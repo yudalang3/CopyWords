@@ -11,7 +11,7 @@ public final class GlobalHotkeys implements AutoCloseable {
     private static final int COMMAND = 0x8001;
     private final ConcurrentLinkedQueue<Runnable> commands = new ConcurrentLinkedQueue<>();
     private final Map<Hotkey, Binding> bindings = new LinkedHashMap<>();
-    private final Consumer<String> copy;
+    private final Consumer<PasteRequest> paste;
     private final CapsHotkeys caps;
     private final Thread thread;
     private int threadId, nextId = 1;
@@ -25,9 +25,9 @@ public final class GlobalHotkeys implements AutoCloseable {
         Binding(int id, Entry entry) { this.id = id; this.entry = entry; }
     }
 
-    public GlobalHotkeys(Consumer<String> copy) {
-        this.copy = copy;
-        caps = new CapsHotkeys(copy);
+    public GlobalHotkeys(Consumer<PasteRequest> paste) {
+        this.paste = paste;
+        caps = new CapsHotkeys(this::trigger);
         var ready = new CompletableFuture<Void>();
         thread = new Thread(() -> {
             try {
@@ -43,7 +43,7 @@ public final class GlobalHotkeys implements AutoCloseable {
                     } else if (message.message == WinUser.WM_HOTKEY && !suspended) {
                         int id = message.wParam.intValue();
                         for (var binding : bindings.values()) {
-                            if (binding.registered && binding.id == id) { copy.accept(binding.entry.text()); break; }
+                            if (binding.registered && binding.id == id) { trigger(binding.entry.hotkey(), binding.entry.text()); break; }
                         }
                     }
                 }
@@ -62,6 +62,11 @@ public final class GlobalHotkeys implements AutoCloseable {
         thread.setDaemon(true);
         thread.start();
         try { ready.join(); } catch (RuntimeException exception) { caps.close(); throw exception; }
+    }
+
+    private void trigger(Hotkey key, String text) {
+        long time = System.nanoTime();
+        paste.accept(new PasteRequest(text, key.key(), InputSimulator.target(), time, caps::isKeyDown));
     }
 
     private <T> T invoke(Callable<T> action) {
@@ -85,6 +90,7 @@ public final class GlobalHotkeys implements AutoCloseable {
     }
 
     private Binding register(Entry entry) {
+        if (entry.hotkey().reservedForPaste()) throw new IllegalArgumentException(Hotkey.PASTE_ADVICE);
         if (nextId > 0xBFFF) nextId = 1;
         while (idUsed(nextId)) { if (++nextId > 0xBFFF) nextId = 1; }
         var binding = new Binding(nextId++, entry);
@@ -100,6 +106,7 @@ public final class GlobalHotkeys implements AutoCloseable {
     private boolean idUsed(int id) { return bindings.values().stream().anyMatch(binding -> binding.id == id); }
     private boolean registerNative(Binding binding) {
         Hotkey key = binding.entry.hotkey();
+        if (key.reservedForPaste()) return false;
         return key.usesCaps() || User32.INSTANCE.RegisterHotKey(null, binding.id, key.modifiers() | 0x4000, key.key());
     }
     static String registrationAdvice(Hotkey key, int error) {

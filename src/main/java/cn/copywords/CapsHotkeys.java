@@ -6,31 +6,34 @@ import com.sun.jna.platform.win32.WinDef.*;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 
 /** A dedicated hook thread: callbacks only match keys and queue copy/capture work. */
 final class CapsHotkeys implements AutoCloseable {
     private static final long SYNTHETIC_CAPS = 0x43574F52L;
-    private final Consumer<String> copy;
+    private final BiConsumer<Hotkey, String> paste;
     private final Set<Integer> downKeys = new HashSet<>(), consumed = new HashSet<>();
     private final WinUser.LowLevelKeyboardProc callback = this::onKey;
     private volatile Map<Hotkey, String> bindings = Map.of();
     private volatile Consumer<Hotkey> capture;
     private volatile boolean paused;
+    private volatile Set<Integer> heldKeys = Set.of();
     private final Thread thread;
     private WinUser.HHOOK hook;
     private int threadId;
     private boolean capsHeld, capsUsed;
 
-    CapsHotkeys(Consumer<String> copy) {
-        this.copy = copy;
+    CapsHotkeys(BiConsumer<Hotkey, String> paste) {
+        this.paste = paste;
         var ready = new CompletableFuture<Void>();
         thread = new Thread(() -> {
             try {
                 threadId = Kernel32.INSTANCE.GetCurrentThreadId();
                 var message = new WinUser.MSG();
                 User32.INSTANCE.PeekMessage(message, null, 0, 0, 0);
-                for (int key : new int[] {0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C})
+                for (int key : new int[] {0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C, 'V'})
                     if (User32.INSTANCE.GetAsyncKeyState(key) < 0) downKeys.add(key);
+                heldKeys = Set.copyOf(downKeys);
                 hook = User32.INSTANCE.SetWindowsHookEx(WinUser.WH_KEYBOARD_LL, callback, Kernel32.INSTANCE.GetModuleHandle(null), 0);
                 if (hook == null) throw new IllegalStateException("无法启用 Caps 快捷键监听。请退出 CopyWords 后重新启动；仍失败时检查安全软件是否阻止了键盘监听。");
                 ready.complete(null);
@@ -44,18 +47,21 @@ final class CapsHotkeys implements AutoCloseable {
     void update(Map<Hotkey, String> bindings) { this.bindings = Map.copyOf(bindings); }
     void pause(boolean paused) { this.paused = paused; }
     void capture(Consumer<Hotkey> listener) { capture = listener; }
+    boolean isKeyDown(int key) { return heldKeys.contains(key); }
 
     private LRESULT next(int code, WPARAM event, WinUser.KBDLLHOOKSTRUCT key) {
         return User32.INSTANCE.CallNextHookEx(hook, code, event, new LPARAM(Pointer.nativeValue(key.getPointer())));
     }
 
     private LRESULT onKey(int code, WPARAM event, WinUser.KBDLLHOOKSTRUCT key) {
-        if (code < 0 || key.dwExtraInfo.longValue() == SYNTHETIC_CAPS) return next(code, event, key);
+        if (code < 0 || key.dwExtraInfo.longValue() == SYNTHETIC_CAPS
+                || key.dwExtraInfo.longValue() == InputSimulator.SYNTHETIC_PASTE) return next(code, event, key);
         try {
             int type = event.intValue(), vk = key.vkCode;
             boolean down = type == WinUser.WM_KEYDOWN || type == WinUser.WM_SYSKEYDOWN;
             boolean wasDown = downKeys.contains(vk);
             if (down) downKeys.add(vk); else downKeys.remove(vk);
+            heldKeys = Set.copyOf(downKeys);
             if (vk == 0x14) {
                 if (down && !wasDown && (capture != null || !paused && !bindings.isEmpty())) {
                     capsHeld = true; capsUsed = false;
@@ -85,7 +91,7 @@ final class CapsHotkeys implements AutoCloseable {
                     String text = bindings.get(hotkey);
                     if (listener != null || !paused && text != null) {
                         consumed.add(vk);
-                        if (!wasDown) { if (listener != null) listener.accept(hotkey); else copy.accept(text); }
+                        if (!wasDown) { if (listener != null) listener.accept(hotkey); else paste.accept(hotkey, text); }
                         return new LRESULT(1);
                     }
                 }

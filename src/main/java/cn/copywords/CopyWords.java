@@ -56,7 +56,7 @@ public final class CopyWords {
         migrationPending = store.upgraded();
         if (migrationPending) firstRun = true;
         clipboard = new ClipboardService(this::setStatus);
-        hotkeys = new GlobalHotkeys(clipboard::copy);
+        hotkeys = new GlobalHotkeys(clipboard::paste);
         buildWindow();
         setupTray();
         var warnings = hotkeys.start(saved);
@@ -81,7 +81,7 @@ public final class CopyWords {
         JLabel title = new JLabel("CopyWords");
         title.setFont(title.getFont().deriveFont(Font.BOLD, 28));
         heading.add(title, BorderLayout.NORTH);
-        heading.add(new JLabel("按住 Caps，再按数字复制；松开后按 Ctrl + V 粘贴。"), BorderLayout.SOUTH);
+        heading.add(new JLabel("按快捷键自动复制并粘贴；Ctrl / Shift / Alt 组合请松开按键。"), BorderLayout.SOUTH);
         content.add(heading, BorderLayout.NORTH);
 
         JPanel list = new JPanel(new BorderLayout(0, 8));
@@ -235,8 +235,9 @@ public final class CopyWords {
     private Config draft() { return new Config(rows.stream().map(Row::entry).toList(), autoStart.isSelected(), startHidden.isSelected()); }
 
     private void capture(Row row) {
+        clipboard.pause();
         try { hotkeys.pause(); }
-        catch (Exception exception) { showError(exception.getMessage()); return; }
+        catch (Exception exception) { clipboard.resume(); showError(exception.getMessage()); return; }
         var dialog = new JDialog(frame, "设置快捷键", true);
         var candidate = new Hotkey[] { row.hotkey };
         JLabel hint = new JLabel("按住 Caps / Ctrl / Shift / Alt，再按字母、数字或 F1–F11");
@@ -250,6 +251,9 @@ public final class CopyWords {
         clear.addActionListener(event -> { row.hotkey = null; row.refresh(); dialog.dispose(); });
         cancel.addActionListener(event -> dialog.dispose());
         accept.addActionListener(event -> {
+            if (candidate[0] != null && candidate[0].reservedForPaste()) {
+                hint.setText(Hotkey.PASTE_ADVICE); return;
+            }
             if (candidate[0] != null && rows.stream().anyMatch(other -> other != row && candidate[0].equals(other.hotkey))) {
                 hint.setText("此快捷键已被其他条目使用，请重新设置"); return;
             }
@@ -283,6 +287,7 @@ public final class CopyWords {
             manager.removeKeyEventDispatcher(dispatcher);
             try {
                 var warnings = hotkeys.resume();
+                clipboard.resume();
                 if (!warnings.isEmpty()) showError(String.join("\n", warnings));
             } catch (Exception exception) { showError(exception.getMessage()); }
         }
@@ -313,7 +318,7 @@ public final class CopyWords {
             }
             @Override protected void done() {
                 saving = false; frame.setEnabled(true);
-                try { get(); saved = candidate; migrationPending = false; setStatus("已保存，快捷键已生效。复制后按 Ctrl + V 粘贴。"); if (afterSave != null) afterSave.run(); }
+                try { get(); saved = candidate; migrationPending = false; setStatus("已保存，快捷键已生效，可在目标输入框触发自动粘贴。"); if (afterSave != null) afterSave.run(); }
                 catch (Exception exception) {
                     Throwable cause = exception.getCause() == null ? exception : exception.getCause();
                     cause.printStackTrace(); markError(cause.getMessage());
@@ -366,7 +371,7 @@ public final class CopyWords {
             @Override public void popupMenuWillBecomeInvisible(PopupMenuEvent event) { trayMenuOwner.setVisible(false); }
             @Override public void popupMenuCanceled(PopupMenuEvent event) { trayMenuOwner.setVisible(false); }
         });
-        tray = new TrayIcon(icon(), "CopyWords — 常用文本快捷复制");
+        tray = new TrayIcon(icon(), "CopyWords — 常用文本快捷粘贴");
         tray.setImageAutoSize(true);
         tray.addActionListener(event -> SwingUtilities.invokeLater(this::showWindow));
         tray.addMouseListener(new MouseAdapter() {
@@ -430,7 +435,8 @@ public final class CopyWords {
     private void setStatus(String message) {
         SwingUtilities.invokeLater(() -> {
             status.setText(message); status.setToolTipText(message);
-            if (message.startsWith("复制失败") && tray != null && !frame.isVisible())
+            if ((message.startsWith("复制失败") || message.startsWith("自动粘贴未完成") || message.contains("请手动"))
+                    && tray != null && !frame.isVisible())
                 tray.displayMessage("CopyWords", message, TrayIcon.MessageType.WARNING);
         });
     }
@@ -451,6 +457,7 @@ public final class CopyWords {
 
     private void exit() {
         exiting = true;
+        clipboard.pause();
         saveWindowState();
         hotkeys.close(); clipboard.close();
         if (tray != null) SystemTray.getSystemTray().remove(tray);

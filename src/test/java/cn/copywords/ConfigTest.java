@@ -75,6 +75,26 @@ class ConfigTest {
         assertEquals("broken xml", Files.readString(path));
     }
 
+    @Test void reservedPasteShortcutIsRejectedOnSaveButLegacyFileIsPreserved() throws Exception {
+        var path = directory.resolve("config.xml");
+        var store = new ConfigStore(path);
+        var config = new Config(List.of(Entry.create("preserved", new Hotkey(Hotkey.CTRL, 'V'))), false, false);
+        assertTrue(assertThrows(IllegalArgumentException.class, config::validate).getMessage().contains("Ctrl + V"));
+        var properties = new Properties();
+        properties.setProperty("count", "1"); properties.setProperty("capsDefaultsVersion", "2");
+        properties.setProperty("autoStart", "false"); properties.setProperty("startHidden", "false");
+        properties.setProperty("entry.0.id", config.entries().getFirst().id());
+        properties.setProperty("entry.0.text", "preserved");
+        properties.setProperty("entry.0.modifiers", "2"); properties.setProperty("entry.0.key", "86");
+        try (var output = Files.newOutputStream(path)) { properties.storeToXML(output, "legacy", "UTF-8"); }
+        byte[] original = Files.readAllBytes(path);
+        assertEquals(config, store.load());
+        assertArrayEquals(original, Files.readAllBytes(path));
+        assertThrows(IllegalArgumentException.class, () -> store.save(config));
+        assertArrayEquals(original, Files.readAllBytes(path));
+        new Config(List.of(Entry.create("allowed", new Hotkey(Hotkey.CAPS | Hotkey.CTRL, 'V'))), false, false).validate();
+    }
+
     @Test void legacyDefaultsUpgradeWithoutChangingTextOrCustomBindings() throws Exception {
         var custom = new Hotkey(Hotkey.CTRL | Hotkey.SHIFT | Hotkey.ALT, '1');
         var legacy = new Config(List.of(Entry.create("my first text", new Hotkey(Hotkey.ALT, '1')),

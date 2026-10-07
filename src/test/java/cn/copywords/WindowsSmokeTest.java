@@ -14,6 +14,8 @@ import java.nio.file.*;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
 import static org.junit.jupiter.api.Assertions.*;
 
 @EnabledIfSystemProperty(named = "copywords.windowsSmoke", matches = "true")
@@ -25,10 +27,12 @@ class WindowsSmokeTest {
         input.type = new DWORD(WinUser.INPUT.INPUT_KEYBOARD);
         input.input.setType("ki");
         input.input.ki = new WinUser.KEYBDINPUT();
-        input.input.ki.wVk = new WORD(key);
+        // Scan-code injection models the physical left/right keys consistently across layouts.
+        input.input.ki.wVk = new WORD(0);
         input.input.ki.wScan = new WORD(User32.INSTANCE.MapVirtualKeyEx(key, 4, User32.INSTANCE.GetKeyboardLayout(0)) & 0xFF);
-        input.input.ki.dwFlags = new DWORD((down ? 0 : WinUser.KEYBDINPUT.KEYEVENTF_KEYUP)
-                | (key == 0xA5 ? WinUser.KEYBDINPUT.KEYEVENTF_EXTENDEDKEY : 0));
+        input.input.ki.dwFlags = new DWORD(WinUser.KEYBDINPUT.KEYEVENTF_SCANCODE
+                | (down ? 0 : WinUser.KEYBDINPUT.KEYEVENTF_KEYUP)
+                | (key == 0xA5 || key == 0xA3 ? WinUser.KEYBDINPUT.KEYEVENTF_EXTENDEDKEY : 0));
         input.input.ki.time = new DWORD(0);
         input.input.ki.dwExtraInfo = new BaseTSD.ULONG_PTR(0);
         assertEquals(1, User32.INSTANCE.SendInput(new DWORD(1), new WinUser.INPUT[] {input}, input.size()).intValue());
@@ -42,6 +46,169 @@ class WindowsSmokeTest {
 
     static String clipboardText() throws Exception {
         return (String) Toolkit.getDefaultToolkit().getSystemClipboard().getData(DataFlavor.stringFlavor);
+    }
+
+    static void waitFor(BooleanSupplier condition) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        while (!condition.getAsBoolean()) {
+            if (System.nanoTime() >= deadline) fail("condition did not become true within 3 seconds");
+            Thread.sleep(10);
+        }
+    }
+
+    static String editorText(JTextArea editor) {
+        var value = new AtomicReference<String>();
+        try { SwingUtilities.invokeAndWait(() -> value.set(editor.getText())); }
+        catch (Exception exception) { throw new RuntimeException(exception); }
+        return value.get();
+    }
+
+    private static final class Editor implements AutoCloseable {
+        final JFrame frame = new JFrame("CopyWords 自动粘贴测试");
+        final JTextArea text = new JTextArea();
+        final Clipboard system = Toolkit.getDefaultToolkit().getSystemClipboard();
+        final Transferable previous = system.getContents(null);
+        final boolean caps = Toolkit.getDefaultToolkit().getLockingKeyState(java.awt.event.KeyEvent.VK_CAPS_LOCK);
+        Editor() throws Exception {
+            SwingUtilities.invokeAndWait(() -> {
+                // This fixture tests keyboard transport; IME compatibility is a separate acceptance case.
+                text.enableInputMethods(false);
+                frame.add(text); frame.setSize(450, 180); frame.setLocationRelativeTo(null); frame.setVisible(true);
+            });
+            try {
+                focus();
+                if (caps) Toolkit.getDefaultToolkit().setLockingKeyState(java.awt.event.KeyEvent.VK_CAPS_LOCK, false);
+            } catch (Exception | AssertionError exception) { close(); throw exception; }
+        }
+        void focus() throws Exception {
+            SwingUtilities.invokeAndWait(() -> { frame.toFront(); text.requestFocusInWindow(); });
+            HWND window = new HWND(Native.getWindowPointer(frame));
+            User32.INSTANCE.SetForegroundWindow(window);
+            waitFor(() -> window.equals(User32.INSTANCE.GetForegroundWindow()));
+            var position = new AtomicReference<Point>();
+            SwingUtilities.invokeAndWait(() -> position.set(text.getLocationOnScreen()));
+            var robot = new Robot();
+            robot.mouseMove(position.get().x + 30, position.get().y + 25);
+            robot.mousePress(java.awt.event.InputEvent.BUTTON1_DOWN_MASK);
+            robot.mouseRelease(java.awt.event.InputEvent.BUTTON1_DOWN_MASK);
+            waitFor(() -> InputSimulator.target().known());
+        }
+        public void close() throws Exception {
+            SwingUtilities.invokeAndWait(frame::dispose);
+            if (Toolkit.getDefaultToolkit().getLockingKeyState(java.awt.event.KeyEvent.VK_CAPS_LOCK) != caps)
+                Toolkit.getDefaultToolkit().setLockingKeyState(java.awt.event.KeyEvent.VK_CAPS_LOCK, caps);
+            if (previous != null) system.setContents(previous, null);
+        }
+    }
+
+    @Test void modifierVariantsWaitForNaturalReleaseAndPasteOnce() throws Exception {
+        var notices = new LinkedBlockingQueue<String>(); var count = new AtomicInteger();
+        var config = new Config(List.of(Entry.create("A", new Hotkey(Hotkey.ALT, '7')),
+                Entry.create("B", new Hotkey(Hotkey.CTRL | Hotkey.SHIFT, '8')),
+                Entry.create("C", new Hotkey(Hotkey.CAPS | Hotkey.CTRL, '9'))), false, false);
+        try (var editor = new Editor(); var clipboard = new ClipboardService(notices::add);
+             var hotkeys = new GlobalHotkeys(request -> { count.incrementAndGet(); clipboard.paste(request); })) {
+            assertTrue(hotkeys.start(config).isEmpty());
+            int[][] variants = {{0xA4, '7'}, {0xA5, '7'}, {0xA2, 0xA0, '8'}, {0xA3, 0xA1, '8'},
+                    {0x14, 0xA2, '9'}, {0x14, 0xA3, '9'}};
+            String expected = "";
+            for (int[] variant : variants) {
+                int before = count.get();
+                for (int i = 0; i < variant.length - 1; i++) key(variant[i], true);
+                try {
+                    key(variant[variant.length - 1], true); key(variant[variant.length - 1], false);
+                    waitFor(() -> count.get() == before + 1);
+                    assertNull(notices.poll(100, TimeUnit.MILLISECONDS));
+                    for (int i = 0; i < variant.length - 1; i++)
+                        if (variant[i] != 0x14) assertTrue(User32.INSTANCE.GetAsyncKeyState(variant[i]) < 0);
+                } finally {
+                    for (int i = variant.length - 2; i >= 0; i--) key(variant[i], false);
+                }
+                String message = notices.poll(3, TimeUnit.SECONDS);
+                assertNotNull(message); assertTrue(message.contains("发送粘贴命令"), message);
+                expected += variant[variant.length - 1] == '7' ? "A" : variant[variant.length - 1] == '8' ? "B" : "C";
+                String value = expected;
+                try { waitFor(() -> editorText(editor.text).equals(value)); }
+                catch (AssertionError exception) {
+                    throw new AssertionError("variant=" + java.util.Arrays.toString(variant)
+                            + ", expected=" + value + ", actual=" + editorText(editor.text), exception);
+                }
+                key('X', true); key('X', false); expected += "x";
+                String withLetter = expected; waitFor(() -> editorText(editor.text).equals(withLetter));
+            }
+        }
+    }
+
+    @Test void rapidCapsRequestsInsertBothTextsWithoutDigits() throws Exception {
+        var notices = new LinkedBlockingQueue<String>();
+        var config = new Config(List.of(Entry.create("A", new Hotkey(Hotkey.CAPS, '1')),
+                Entry.create("B", new Hotkey(Hotkey.CAPS, '2'))), false, false);
+        try (var editor = new Editor(); var clipboard = new ClipboardService(notices::add);
+             var hotkeys = new GlobalHotkeys(clipboard::paste)) {
+            assertTrue(hotkeys.start(config).isEmpty());
+            key(0x14, true);
+            try {
+                key('1', true); Thread.sleep(10); key('1', false);
+                key('2', true); Thread.sleep(10); key('2', false);
+            } finally { key('1', false); key('2', false); key(0x14, false); }
+            waitFor(() -> editorText(editor.text).equals("AB"));
+            assertEquals("B", clipboardText());
+            assertTrue(notices.poll(3, TimeUnit.SECONDS).contains("发送粘贴命令"));
+            assertTrue(notices.poll(3, TimeUnit.SECONDS).contains("发送粘贴命令"));
+        }
+    }
+
+    @Test void switchingWindowWhileMainKeyIsHeldCancelsInput() throws Exception {
+        var notices = new LinkedBlockingQueue<String>(); var triggered = new CountDownLatch(1);
+        try (var first = new Editor(); var second = new Editor(); var clipboard = new ClipboardService(notices::add);
+             var hotkeys = new GlobalHotkeys(request -> { triggered.countDown(); clipboard.paste(request); })) {
+            first.focus(); assertTrue(hotkeys.start(Config.defaults()).isEmpty());
+            key(0x14, true); key('1', true);
+            try {
+                assertTrue(triggered.await(3, TimeUnit.SECONDS)); second.focus();
+            } finally { key('1', false); key(0x14, false); }
+            String message = notices.poll(3, TimeUnit.SECONDS);
+            assertNotNull(message); assertTrue(message.contains("焦点已变化"), message);
+            assertEquals("", editorText(first.text)); assertEquals("", editorText(second.text));
+        }
+    }
+
+    @Test void reservedCtrlVIsSkippedAndManualPasteStillWorks() throws Exception {
+        var notices = new LinkedBlockingQueue<String>(); var count = new AtomicInteger();
+        var config = new Config(List.of(Entry.create("bad", new Hotkey(Hotkey.CTRL, 'V')),
+                Entry.create("A", new Hotkey(Hotkey.CAPS, '1'))), false, false);
+        try (var editor = new Editor(); var clipboard = new ClipboardService(notices::add);
+             var hotkeys = new GlobalHotkeys(request -> { count.incrementAndGet(); clipboard.paste(request); })) {
+            var warnings = hotkeys.start(config); assertEquals(1, warnings.size()); assertTrue(warnings.getFirst().contains("Ctrl + V"));
+            editor.system.setContents(new StringSelection("outside"), null); press(0xA2, 'V');
+            waitFor(() -> editorText(editor.text).equals("outside")); assertEquals(0, count.get());
+            press(0x14, '1'); waitFor(() -> editorText(editor.text).equals("outsideA"));
+            Thread.sleep(500); assertEquals(1, count.get());
+        }
+    }
+
+    @Test void externalClipboardChangeCancelsNativePasteAndQueuedWrite() throws Exception {
+        var notices = new LinkedBlockingQueue<String>(); var written = new CountDownLatch(1); var release = new CountDownLatch(1);
+        var systemClipboard = InputSimulator.clipboard();
+        ClipboardService.ClipboardAccess clipboardAccess = new ClipboardService.ClipboardAccess() {
+            public void write(String text) {
+                systemClipboard.write(text); written.countDown();
+                try { if (!release.await(2, TimeUnit.SECONDS)) throw new IllegalStateException("test release timeout"); }
+                catch (InterruptedException exception) { Thread.currentThread().interrupt(); throw new IllegalStateException(exception); }
+            }
+            public ClipboardService.Snapshot snapshot(String expectedText) { return systemClipboard.snapshot(expectedText); }
+        };
+        try (var editor = new Editor(); var clipboard = new ClipboardService(clipboardAccess, new InputSimulator(), notices::add);
+             var hotkeys = new GlobalHotkeys(clipboard::paste)) {
+            assertTrue(hotkeys.start(Config.defaults()).isEmpty());
+            try {
+                press(0x14, '1'); assertTrue(written.await(3, TimeUnit.SECONDS));
+                press(0x14, '2'); editor.system.setContents(new StringSelection("outside"), null);
+            } finally { release.countDown(); }
+            String message = notices.poll(3, TimeUnit.SECONDS);
+            assertNotNull(message); assertTrue(message.contains("剪贴板已被其他程序修改"), message);
+            Thread.sleep(200); assertEquals("outside", clipboardText()); assertEquals("", editorText(editor.text));
+        } finally { release.countDown(); }
     }
 
     @Test void actualKeysCopyAcrossWindowsAndReleaseOnExit() throws Exception {
@@ -59,7 +226,7 @@ class WindowsSmokeTest {
         var defaultConfig = new Config(List.of(Entry.create("AI4S", new Hotkey(Hotkey.ALT, '1')),
                 Entry.create("人生价值", new Hotkey(6, '2')), Entry.create("xxx@example.com", new Hotkey(Hotkey.ALT, '3'))), false, false);
         try (var clipboard = new ClipboardService(notices::add)) {
-            try (var service = new GlobalHotkeys(text -> { count.incrementAndGet(); clipboard.copy(text); })) {
+            try (var service = new GlobalHotkeys(request -> { count.incrementAndGet(); clipboard.paste(request); })) {
                 assertTrue(service.start(defaultConfig).isEmpty());
                 press(0xA4, '1');
                 assertNotNull(notices.poll(3, TimeUnit.SECONDS)); assertEquals("AI4S", clipboardText());
@@ -72,13 +239,17 @@ class WindowsSmokeTest {
                 int before = count.get();
                 key(0xA4, true); key('1', true);
                 try {
-                    assertNotNull(notices.poll(3, TimeUnit.SECONDS));
+                    waitFor(() -> count.get() == before + 1);
+                    assertNull(notices.poll(100, TimeUnit.MILLISECONDS), "must wait for modifier release");
                     for (int i = 0; i < 4; i++) { key('1', true); Thread.sleep(100); }
                     assertEquals(before + 1, count.get());
                 } finally { key('1', false); key(0xA4, false); }
+                assertNotNull(notices.poll(3, TimeUnit.SECONDS));
+                clipboard.pause();
                 service.pause();
                 press(0xA4, '1'); assertNull(notices.poll(200, TimeUnit.MILLISECONDS));
                 assertTrue(service.resume().isEmpty());
+                clipboard.resume();
                 press(0xA4, '1'); assertNotNull(notices.poll(3, TimeUnit.SECONDS));
                 var changed = new Config(List.of(Entry.create("  保存后的中文  ", new Hotkey(Hotkey.ALT, '1'))), false, false);
                 service.apply(changed, () -> new ConfigStore(directory.resolve("config.xml")).save(changed));
@@ -97,7 +268,7 @@ class WindowsSmokeTest {
         var messages = new LinkedBlockingQueue<String>();
         var original = new Config(List.of(Entry.create("old", new Hotkey(Hotkey.ALT, '8'))), false, false);
         var occupied = new Config(List.of(Entry.create("busy", new Hotkey(Hotkey.ALT, '9'))), false, false);
-        try (var service = new GlobalHotkeys(messages::add); var blocker = new GlobalHotkeys(text -> { })) {
+        try (var service = new GlobalHotkeys(request -> messages.add(request.text())); var blocker = new GlobalHotkeys(request -> { })) {
             assertTrue(service.start(original).isEmpty()); assertTrue(blocker.start(occupied).isEmpty());
             var candidate = new Config(List.of(Entry.create("new", new Hotkey(Hotkey.ALT, '9'))), false, false);
             assertThrows(IllegalStateException.class, () -> service.apply(candidate, () -> fail("must not persist")));
@@ -108,7 +279,7 @@ class WindowsSmokeTest {
             try (var released = new GlobalHotkeys(text -> { })) { assertTrue(released.start(staged).isEmpty()); }
             var partiallyAvailable = new Config(List.of(Entry.create("blocked", new Hotkey(Hotkey.ALT, '9')),
                     Entry.create("works", new Hotkey(Hotkey.ALT, '6'))), false, false);
-            try (var partial = new GlobalHotkeys(messages::add)) {
+            try (var partial = new GlobalHotkeys(request -> messages.add(request.text()))) {
                 assertEquals(1, partial.start(partiallyAvailable).size());
                 press(0xA4, '6'); assertEquals("works", messages.poll(3, TimeUnit.SECONDS));
             }
@@ -123,6 +294,31 @@ class WindowsSmokeTest {
             assertEquals(old, store.load());
         }
         try (var files = Files.list(directory)) { assertEquals(1, files.count()); }
+    }
+
+    @Test void nativeClipboardSnapshotReadsSystemTextAndVersion() throws Exception {
+        Clipboard system = Toolkit.getDefaultToolkit().getSystemClipboard();
+        Transferable previous = system.getContents(null);
+        var clipboard = InputSimulator.clipboard();
+        String text = "  中文😀 & <AI4S>  ";
+        try {
+            clipboard.write(text);
+            ClipboardService.Snapshot first = null;
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+            while (first == null) {
+                try { first = clipboard.snapshot(text); }
+                catch (IllegalStateException exception) {
+                    if (System.nanoTime() >= deadline) throw exception;
+                    Thread.sleep(10);
+                }
+            }
+            assertEquals(text, first.text()); assertTrue(first.version() > 0);
+            system.setContents(new StringSelection("outside text that must not be pasted"), null);
+            var changed = clipboard.snapshot(text);
+            assertNotEquals(first.version(), changed.version()); assertNotEquals(text, changed.text());
+            system.setContents(new StringSelection("短"), null);
+            assertEquals("短", clipboard.snapshot(text).text());
+        } finally { if (previous != null) system.setContents(previous, null); }
     }
 
     @Test void autoStartCanBeEnabledAndDisabledWithoutTouchingRealEntry() {
@@ -148,28 +344,30 @@ class WindowsSmokeTest {
         assertEquals(new HWND(Native.getWindowPointer(frame)), User32.INSTANCE.GetForegroundWindow(), "test editor must have foreground focus");
         boolean initialCaps = Toolkit.getDefaultToolkit().getLockingKeyState(java.awt.event.KeyEvent.VK_CAPS_LOCK);
         try (var clipboard = new ClipboardService(notices::add);
-             var service = new GlobalHotkeys(text -> { count.incrementAndGet(); clipboard.copy(text); })) {
+             var service = new GlobalHotkeys(request -> { count.incrementAndGet(); clipboard.paste(request); })) {
             assertTrue(service.start(Config.defaults()).isEmpty());
             press(0x14, '1'); assertNotNull(notices.poll(3, TimeUnit.SECONDS)); assertEquals("AI4S", clipboardText());
-            Thread.sleep(100);
+            waitFor(() -> editorText(editor).equals("AI4S"));
             assertEquals(initialCaps, Toolkit.getDefaultToolkit().getLockingKeyState(java.awt.event.KeyEvent.VK_CAPS_LOCK));
-            SwingUtilities.invokeAndWait(() -> assertEquals("", editor.getText(), "Caps digit must not type into the editor"));
-            press(0xA2, 'V'); Thread.sleep(200);
             SwingUtilities.invokeAndWait(() -> assertEquals("AI4S", editor.getText()));
             int before = count.get(); key(0x14, true); key('2', true);
             try {
-                assertNotNull(notices.poll(3, TimeUnit.SECONDS));
+                waitFor(() -> count.get() == before + 1);
+                assertNull(notices.poll(100, TimeUnit.MILLISECONDS), "must wait for main key release");
                 for (int i = 0; i < 3; i++) { key('2', true); Thread.sleep(80); }
-                assertEquals(before + 1, count.get()); assertEquals("人生价值", clipboardText());
+                assertEquals(before + 1, count.get());
             } finally { key('2', false); key(0x14, false); }
+            assertNotNull(notices.poll(3, TimeUnit.SECONDS)); assertEquals("人生价值", clipboardText());
+            waitFor(() -> editorText(editor).equals("AI4S人生价值"));
             key(0x14, true); key(0x14, false); Thread.sleep(200);
             assertEquals(!initialCaps, Toolkit.getDefaultToolkit().getLockingKeyState(java.awt.event.KeyEvent.VK_CAPS_LOCK), "standalone Caps retains toggle");
             key(0x14, true); key(0x14, false); Thread.sleep(200);
             assertEquals(initialCaps, Toolkit.getDefaultToolkit().getLockingKeyState(java.awt.event.KeyEvent.VK_CAPS_LOCK));
             service.apply(new Config(List.of(Entry.create("  新内容  ", new Hotkey(Hotkey.CAPS, '1'))), false, false), () -> { });
             press(0x14, '1'); assertNotNull(notices.poll(3, TimeUnit.SECONDS)); assertEquals("  新内容  ", clipboardText());
-            service.pause(); press(0x14, '1'); assertNull(notices.poll(200, TimeUnit.MILLISECONDS));
+            clipboard.pause(); service.pause(); press(0x14, '1'); assertNull(notices.poll(200, TimeUnit.MILLISECONDS));
             assertTrue(service.resume().isEmpty());
+            clipboard.resume();
             press(0x14, '1'); assertNotNull(notices.poll(3, TimeUnit.SECONDS));
         } finally {
             if (Toolkit.getDefaultToolkit().getLockingKeyState(java.awt.event.KeyEvent.VK_CAPS_LOCK) != initialCaps)

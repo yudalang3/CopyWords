@@ -31,7 +31,7 @@ public final class ConfigStore {
             }
             var config = new Config(entries, Boolean.parseBoolean(properties.getProperty("autoStart", "true")),
                     Boolean.parseBoolean(properties.getProperty("startHidden", "true")));
-            config.validate();
+            config.validateLoaded();
             Config current = properties.containsKey("capsDefaultsVersion") ? config : config.upgradeLegacyDefaults();
             upgraded = !current.equals(config);
             return current;

@@ -20,6 +20,7 @@ import java.util.function.BooleanSupplier;
 public class UiSmoke {
     static Object app;
     static JFrame frame;
+    static JFrame pasteTarget;
     static Robot robot;
     static final List<String> report = new ArrayList<>();
 
@@ -199,13 +200,35 @@ public class UiSmoke {
             check(java.util.Arrays.equals(savedTextConfig, Files.readAllBytes(config)),
                     "saving window geometry does not save unsaved text draft");
             systemClipboard.setContents(new StringSelection("hidden sentinel"), null);
+            var pasteEditor = new JTextArea();
+            onEdt(() -> {
+                pasteTarget = new JFrame("CopyWords auto-paste test target");
+                pasteTarget.add(pasteEditor);
+                pasteTarget.setBounds(100, 100, 400, 240);
+                pasteTarget.setVisible(true);
+                pasteEditor.requestFocusInWindow();
+            });
+            HWND targetWindow = new HWND(Native.getComponentPointer(pasteTarget));
+            User32.INSTANCE.SetForegroundWindow(targetWindow);
+            var editorLocation = new AtomicReference<Point>();
+            onEdt(() -> editorLocation.set(pasteEditor.getLocationOnScreen()));
+            robot.mouseMove(editorLocation.get().x + 30, editorLocation.get().y + 30);
+            robot.mousePress(InputEvent.BUTTON1_DOWN_MASK); robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK);
+            waitFor(() -> targetWindow.equals(User32.INSTANCE.GetForegroundWindow()), "test editor did not gain foreground");
             robot.keyPress(KeyEvent.VK_CONTROL); robot.keyPress(KeyEvent.VK_SHIFT); robot.keyPress(KeyEvent.VK_4);
             robot.keyRelease(KeyEvent.VK_4); robot.keyRelease(KeyEvent.VK_SHIFT); robot.keyRelease(KeyEvent.VK_CONTROL);
             waitFor(() -> {
                 try { return "  测试中文  ".equals(systemClipboard.getData(DataFlavor.stringFlavor)); }
                 catch (Exception exception) { return false; }
             }, "hidden-window hotkey did not copy");
-            check(!frame.isVisible(), "hotkey copies correct text while app stays hidden in tray");
+            waitFor(() -> {
+                var text = new AtomicReference<String>();
+                try { onEdt(() -> text.set(pasteEditor.getText())); }
+                catch (Exception exception) { throw new RuntimeException(exception); }
+                return "  测试中文  ".equals(text.get());
+            }, "hidden-window hotkey did not paste into test editor");
+            check(!frame.isVisible(), "hotkey copies and pastes correct text while app stays hidden in tray");
+            onEdt(pasteTarget::dispose);
             TrayIcon tray = (TrayIcon) field(app, "tray");
             check(tray != null, "system tray available");
             JPopupMenu trayMenu = (JPopupMenu) field(app, "trayMenu");
@@ -294,6 +317,7 @@ public class UiSmoke {
                     .save(Path.of("logs/ui-" + suffix + "-expected-window.xml"));
             success = true;
         } finally {
+            if (pasteTarget != null) onEdt(pasteTarget::dispose);
             startup.restore(oldStartup);
             if (oldClipboard != null) systemClipboard.setContents(oldClipboard, null);
             if (!success) {
