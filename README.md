@@ -92,7 +92,7 @@
 </p>
 
 - **行内精准红框**：一眼看出哪一行快捷键冲突。
-- **状态栏与弹窗双重警示**：详细给出系统错误码，指导用户更换按键。
+- **保存状态与行内提示**：自动保存失败时显示原因，指导用户更换按键或点击“重试”，编辑过程中不反复弹窗。
 - **配置原子保护**：保存失败时自动回滚，确保现有生效条目不受损害。
 
 ### 5. 🖥️ 无缝托盘驻留与多显示器自适应
@@ -120,15 +120,17 @@
 flowchart LR
     A["1. 编辑文本\n(保留中文与空格)"] --> B["2. 录制快捷键\n(点选按钮后按键)"]
     B --> C["3. 增减词条\n(+添加 / 删除)"]
-    C --> D["4. 点击保存\n(校验并热生效)"]
+    C --> D["4. 自动保存\n(校验并热生效)"]
     D --> E["5. 目标框一键触发\n(自动复制+粘贴)"]
 ```
 
 1. **输入文本**：在右侧文本框输入常用词语、短句、邮箱或代码。文本为单行，中文及首尾空格均会原样保留。
 2. **录制快捷键**：点击左侧快捷键按钮，直接按下你想要的组合键（如 `Caps + 1`，或按住 `Ctrl`/`Shift`/`左 Alt` + 字母/数字/F1–F11），然后点击“确定”。
 3. **添加与删除**：点击底部 **“+ 添加”** 增加新行（新增条目将优先分配尚未占用的 `Caps + 1~9, 0`）；点击每行右侧的 **“删除”** 即可移除。
-4. **保存生效**：点击右下角 **“保存”**。所有快捷键即刻注册生效。若某行冲突，该行会显示红框提示修改。
+4. **自动保存生效**：非空文本停止输入 500 毫秒后自动保存；离开文本框或按回车立即保存。快捷键确认、清除、删除及勾选项修改立即保存。若某行冲突，该行会显示红框及失败原因，可修改后重试。中文输入法尚未确认的候选文字不会保存。
 5. **任意位置一键粘贴**：在微信、浏览器输入框、Word、Notepad 或 IDE 等目标应用的光标处，按下对应快捷键，松开主键即刻自动键入！
+
+编辑中暂时清空文本不会实时保存，快捷键仍使用上次有效内容；离开文本框、按回车或关闭窗口后才确认清空并停用该绑定。新增空白行暂不写入配置；填写非空文本或确认快捷键后自动保存，文本为空时快捷键不启用。
 
 ### 默认预设配置
 
@@ -167,12 +169,12 @@ flowchart LR
   <img src="https://img.shields.io/badge/Window%20Memory-Multi--Monitor%20Safe-orange" alt="Window Memory" />
 </p>
 
-- **关闭行为可选**：默认不勾选“点击窗口关闭按钮时，隐藏到系统托盘继续运行（不勾选则退出程序）”，点击右上角关闭按钮会退出程序。勾选后，关闭窗口会隐藏到托盘继续服务；托盘不可用时仍走退出流程。勾选或取消立即影响本次关闭，点击“保存”后下次启动也会记住。隐藏窗口不会自动保存修改。
+- **关闭行为可选**：默认不勾选“点击窗口关闭按钮时，隐藏到系统托盘继续运行（不勾选则退出程序）”，点击右上角关闭按钮会退出程序。勾选后，关闭窗口会隐藏到托盘继续服务；托盘不可用时仍走退出流程。选项修改自动保存；隐藏或退出前会完成最新修改的保存。
 - **右键菜单**：右键点击托盘图标可弹出菜单（包含“打开设置”与“退出”）。菜单支持按 `Escape` 键或点击其他区域自动关闭。
 - **重复启动保护**：当程序已在托盘运行时，再次双击运行将自动弹出提示并直接唤醒已存在的窗口。
-- **安全退出确认**：若有未保存的修改，退出前会弹出确认对话框供您选择“保存退出”、“丢弃修改退出”或“取消”。
+- **安全退出**：正常退出自动保存，无需确认。保存失败时才提供“重试并退出”、“丢弃未保存修改并退出”或“取消”；隐藏到托盘失败则保持窗口打开。
 - **开机自启选项**：
-  - 勾选“Windows 启动时自动运行”：写入当前用户的 Windows Run 注册表，登录系统后自动启动，无需管理员提权。首次点击保存后正式生效。
+  - 勾选“Windows 启动时自动运行”：写入当前用户的 Windows Run 注册表，登录系统后自动启动，无需管理员提权。首次有效修改自动保存时同步此设置，随后仅在该选项变化时更新登记。
   - 勾选“启动后最小化到系统托盘”：开机自启后静默缩入托盘，不打扰屏幕视觉。
 
 ---
@@ -228,7 +230,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run.ps1
 # 运行常规测试（33项）
 mvn -B '-Dmaven.repo.local=temp/m2' test
 
-# 运行完整测试（含12项原生键鼠操作与剪贴板模拟测试，共45项）
+# 运行完整测试（含12项原生键鼠操作与剪贴板模拟测试，共46项）
 mvn -B '-Dmaven.repo.local=temp/m2' '-Dcopywords.windowsSmoke=true' test
 ```
 
@@ -242,9 +244,12 @@ mvn -B '-Dmaven.repo.local=temp/m2' '-Dcopywords.windowsSmoke=true' test
 java --enable-native-access=ALL-UNNAMED -cp dist/CopyWords.jar scripts/UiSmoke.java
 java --enable-native-access=ALL-UNNAMED -cp dist/CopyWords.jar scripts/WindowStateExitCheck.java
 
-# 150% 高分屏缩放 UI 校验，覆盖保存并退出
-java --enable-native-access=ALL-UNNAMED '-Dsun.java2d.uiScale=1.5' -cp dist/CopyWords.jar scripts/UiSmoke.java 150percent save
-java --enable-native-access=ALL-UNNAMED -cp dist/CopyWords.jar scripts/WindowStateExitCheck.java 150percent save
+# 150% 高分屏缩放 UI 校验，覆盖自动保存并退出
+java --enable-native-access=ALL-UNNAMED '-Dsun.java2d.uiScale=1.5' -cp dist/CopyWords.jar scripts/UiSmoke.java 150percent
+java --enable-native-access=ALL-UNNAMED -cp dist/CopyWords.jar scripts/WindowStateExitCheck.java 150percent
+
+# 自动保存专项检查（使用隔离配置及测试专用自启动项）
+java --enable-native-access=ALL-UNNAMED -cp dist/CopyWords.jar scripts/AutoSaveSmoke.java
 
 # 无修改时直接关闭，以及勾选托盘运行时从托盘菜单退出
 java --enable-native-access=ALL-UNNAMED -cp dist/CopyWords.jar scripts/CloseExitSmoke.java

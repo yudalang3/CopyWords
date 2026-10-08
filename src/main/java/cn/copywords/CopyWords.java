@@ -5,6 +5,8 @@ import javax.swing.border.*;
 import javax.swing.plaf.FontUIResource;
 import javax.swing.event.PopupMenuEvent;
 import javax.swing.event.PopupMenuListener;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.image.BufferedImage;
@@ -21,8 +23,10 @@ public final class CopyWords {
     private final JCheckBox autoStart = new JCheckBox("Windows 启动时自动运行");
     private final JCheckBox startHidden = new JCheckBox("启动后最小化到系统托盘");
     private final JCheckBox closeToTray = new JCheckBox("点击窗口关闭按钮时，隐藏到系统托盘继续运行（不勾选则退出程序）");
-    private final JLabel status = new JLabel("设置条目后点击保存，快捷键即可在其他应用中使用");
-    private final JButton save = new JButton("保存");
+    private final JLabel status = new JLabel("设置会自动保存；空文本条目不启用快捷键");
+    private final JLabel saveStatus = new JLabel("设置会自动保存");
+    private final JButton retry = new JButton("重试");
+    private final javax.swing.Timer saveTimer = new javax.swing.Timer(500, event -> saveLatest());
     private final ConfigStore store;
     private final Path windowStatePath;
     private Rectangle normalBounds;
@@ -35,6 +39,9 @@ public final class CopyWords {
     private JPopupMenu trayMenu;
     private JDialog trayMenuOwner;
     private boolean saving, exiting, migrationPending;
+    private boolean ready, capturing, confirmingText, pendingSave, userSaveRequested, startupSynced, saveCompleted, closingForExit;
+    private Row pendingCapture;
+    private Runnable afterSave;
     private FileChannel lockChannel;
     private FileLock lock;
 
@@ -61,7 +68,11 @@ public final class CopyWords {
         buildWindow();
         setupTray();
         var warnings = hotkeys.start(saved);
-        if (migrationPending) setStatus("默认快捷键已更新为 Caps + 数字，文本已保留。请点击保存完成升级。");
+        ready = true;
+        if (migrationPending) {
+            setStatus("默认快捷键已更新为 Caps + 数字，文本已保留。");
+            SwingUtilities.invokeLater(this::saveLatest);
+        }
         if (firstRun || !saved.startHidden() || tray == null || !warnings.isEmpty()) showWindow();
         if (loadWarning != null) showError(loadWarning);
         if (!warnings.isEmpty()) showError(String.join("\n", warnings));
@@ -71,8 +82,9 @@ public final class CopyWords {
         frame.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         frame.addWindowListener(new WindowAdapter() {
             @Override public void windowClosing(WindowEvent event) {
-                if (saving) return;
-                if (closeToTray.isSelected() && tray != null) { saveWindowState(); frame.setVisible(false); } else requestExit();
+                if (closeToTray.isSelected() && tray != null) {
+                    flushAutoSave(() -> { saveWindowState(); frame.setVisible(false); });
+                } else requestExit();
             }
         });
         frame.setIconImage(icon());
@@ -105,7 +117,7 @@ public final class CopyWords {
         JButton add = new JButton("+ 添加");
         add.setName("add");
         add.addActionListener(event -> {
-            addRow(Entry.create("", Hotkey.nextDefault(draft().entries())));
+            addRow(Entry.create("", Hotkey.nextDefault(draft().entries())), false);
             rowsPanel.revalidate(); rowsPanel.repaint();
             SwingUtilities.invokeLater(() -> {
                 Row last = rows.getLast();
@@ -125,13 +137,21 @@ public final class CopyWords {
         autoStart.setName("autoStart"); startHidden.setName("startHidden");
         closeToTray.setSelected(saved.closeToTray()); closeToTray.setName("closeToTray");
         options.add(autoStart); options.add(startHidden); options.add(closeToTray);
+        for (JCheckBox option : List.of(autoStart, startHidden, closeToTray))
+            option.addItemListener(event -> requestAutoSave(true));
         bottom.add(options, BorderLayout.NORTH);
         JPanel footer = new JPanel(new BorderLayout(12, 0));
         status.setFont(status.getFont().deriveFont(12f));
         status.setForeground(new Color(90, 100, 110));
-        save.setPreferredSize(new Dimension(95, 34)); save.setName("save");
-        save.addActionListener(event -> save(null));
-        footer.add(status, BorderLayout.CENTER); footer.add(save, BorderLayout.EAST);
+        saveTimer.setRepeats(false);
+        saveStatus.setName("saveStatus");
+        saveStatus.setFont(saveStatus.getFont().deriveFont(12f));
+        saveStatus.setPreferredSize(new Dimension(110, 34));
+        retry.setName("retry"); retry.setVisible(false);
+        retry.addActionListener(event -> flushAutoSave(null));
+        JPanel saveFeedback = new JPanel(new BorderLayout(12, 0));
+        saveFeedback.add(saveStatus, BorderLayout.CENTER); saveFeedback.add(retry, BorderLayout.EAST);
+        footer.add(status, BorderLayout.CENTER); footer.add(saveFeedback, BorderLayout.EAST);
         bottom.add(footer, BorderLayout.SOUTH);
         content.add(bottom, BorderLayout.SOUTH);
         frame.setContentPane(content);
@@ -190,7 +210,11 @@ public final class CopyWords {
     }
 
     private void addRow(Entry entry) {
-        var row = new Row(entry);
+        addRow(entry, true);
+    }
+
+    private void addRow(Entry entry, boolean included) {
+        var row = new Row(entry, included);
         rows.add(row);
         rowsPanel.add(row.panel);
     }
@@ -211,8 +235,11 @@ public final class CopyWords {
         final JButton shortcut = new JButton();
         final JTextField text;
         final Border normalTextBorder;
-        Row(Entry entry) {
+        String saveableText;
+        boolean included, composing;
+        Row(Entry entry, boolean included) {
             id = entry.id(); hotkey = entry.hotkey();
+            saveableText = entry.text(); this.included = included;
             text = new JTextField(entry.text()); text.setName("text-" + id);
             text.setBorder(new CompoundBorder(text.getBorder(), new EmptyBorder(0, 8, 0, 0)));
             normalTextBorder = text.getBorder();
@@ -227,9 +254,46 @@ public final class CopyWords {
             delete.addActionListener(event -> {
                 rows.remove(this); rowsPanel.remove(panel);
                 rowsPanel.revalidate(); rowsPanel.repaint();
+                if (this.included) requestAutoSave(true);
             });
             panel.add(shortcut, BorderLayout.WEST); panel.add(text, BorderLayout.CENTER);
             panel.add(delete, BorderLayout.EAST);
+            text.getDocument().addDocumentListener(new DocumentListener() {
+                @Override public void insertUpdate(DocumentEvent event) { changed(); }
+                @Override public void removeUpdate(DocumentEvent event) { changed(); }
+                @Override public void changedUpdate(DocumentEvent event) { changed(); }
+                private void changed() { SwingUtilities.invokeLater(() -> readText(false)); }
+            });
+            text.addInputMethodListener(new InputMethodListener() {
+                @Override public void inputMethodTextChanged(InputMethodEvent event) {
+                    var characters = event.getText();
+                    composing = characters != null && event.getCommittedCharacterCount()
+                            < characters.getEndIndex() - characters.getBeginIndex();
+                    SwingUtilities.invokeLater(() -> readText(false));
+                }
+                @Override public void caretPositionChanged(InputMethodEvent event) { }
+            });
+            text.addFocusListener(new FocusAdapter() {
+                @Override public void focusLost(FocusEvent event) {
+                    SwingUtilities.invokeLater(() -> readText(true));
+                }
+            });
+            text.addActionListener(event -> {
+                text.getInputContext().endComposition();
+                SwingUtilities.invokeLater(() -> readText(true));
+            });
+        }
+        void readText(boolean confirmEmpty) {
+            if (!ready || exiting || !rows.contains(this) || composing) return;
+            String value = text.getText();
+            if (value.isEmpty() && !confirmEmpty) {
+                if (!saveableText.isEmpty()) setSaveStatus("文本暂为空；离开文本框后确认清空", false);
+                return;
+            }
+            if (!value.isEmpty()) included = true;
+            if (value.equals(saveableText)) return;
+            saveableText = value;
+            requestAutoSave(confirmEmpty);
         }
         void refresh() { shortcut.setText(hotkey == null ? "点击设置" : hotkey.toString()); }
         Entry entry() { return new Entry(id, text.getText(), hotkey); }
@@ -237,13 +301,28 @@ public final class CopyWords {
 
     private Config draft() { return new Config(rows.stream().map(Row::entry).toList(), autoStart.isSelected(), startHidden.isSelected(), closeToTray.isSelected()); }
 
+    private Config buildSaveCandidate() {
+        return new Config(rows.stream().filter(row -> row.included)
+                .map(row -> new Entry(row.id, row.saveableText, row.hotkey)).toList(),
+                autoStart.isSelected(), startHidden.isSelected(), closeToTray.isSelected());
+    }
+
     private void capture(Row row) {
+        if (exiting || afterSave != null || !rows.contains(row)) return;
+        if (saving) { pendingCapture = row; return; }
+        capturing = true;
+        saveTimer.stop();
         clipboard.pause();
         try { hotkeys.pause(); }
-        catch (Exception exception) { clipboard.resume(); showError(exception.getMessage()); return; }
+        catch (Exception exception) {
+            capturing = false; clipboard.resume(); showError(exception.getMessage());
+            if (pendingSave) saveLatest();
+            return;
+        }
         var dialog = new JDialog(frame, "设置快捷键", true);
         var candidate = new Hotkey[] { row.hotkey };
         var invalid = new boolean[1];
+        var accepted = new boolean[1];
         JLabel hint = new JLabel("按住 Caps / Ctrl / Shift / 左 Alt，再按字母、数字或 F1–F11");
         JLabel value = new JLabel(row.hotkey == null ? "尚未设置" : row.hotkey.toString(), SwingConstants.CENTER);
         value.setFont(value.getFont().deriveFont(Font.BOLD, 22));
@@ -252,7 +331,9 @@ public final class CopyWords {
         center.add(hint, BorderLayout.NORTH); center.add(value, BorderLayout.CENTER);
         JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         JButton clear = new JButton("清除"), cancel = new JButton("取消"), accept = new JButton("确定");
-        clear.addActionListener(event -> { row.hotkey = null; row.refresh(); dialog.dispose(); });
+        clear.addActionListener(event -> {
+            row.hotkey = null; row.included = true; accepted[0] = true; row.refresh(); dialog.dispose();
+        });
         cancel.addActionListener(event -> dialog.dispose());
         accept.addActionListener(event -> {
             if (invalid[0]) { hint.setText(Hotkey.LEFT_ALT_ADVICE); return; }
@@ -262,7 +343,7 @@ public final class CopyWords {
             if (candidate[0] != null && rows.stream().anyMatch(other -> other != row && candidate[0].equals(other.hotkey))) {
                 hint.setText("此快捷键已被其他条目使用，请重新设置"); return;
             }
-            row.hotkey = candidate[0]; row.refresh(); dialog.dispose();
+            row.hotkey = candidate[0]; row.included = true; accepted[0] = true; row.refresh(); dialog.dispose();
         });
         buttons.add(clear); buttons.add(cancel); buttons.add(accept);
         center.add(buttons, BorderLayout.SOUTH); dialog.setContentPane(center);
@@ -279,7 +360,7 @@ public final class CopyWords {
                 candidate[0] = Hotkey.from(event, hotkeys.rightAltDown());
                 invalid[0] = false;
                 value.setText(candidate[0].toString());
-                hint.setText("点击“确定”设置，点击主窗口“保存”后生效");
+                hint.setText("点击“确定”后自动保存并生效");
             } catch (IllegalArgumentException exception) {
                 if (hotkeys.rightAltDown() || event.isAltGraphDown()) invalid[0] = true;
                 hint.setText(exception.getMessage());
@@ -292,7 +373,7 @@ public final class CopyWords {
             if (!dialog.isShowing()) return;
             candidate[0] = key; value.setText(key.toString());
             invalid[0] = false;
-            hint.setText("点击“确定”设置，点击主窗口“保存”后生效");
+            hint.setText("点击“确定”后自动保存并生效");
         }));
         try { dialog.setVisible(true); }
         finally {
@@ -300,26 +381,70 @@ public final class CopyWords {
             manager.removeKeyEventDispatcher(dispatcher);
             try {
                 var warnings = hotkeys.resume();
-                clipboard.resume();
                 if (!warnings.isEmpty()) showError(String.join("\n", warnings));
             } catch (Exception exception) { showError(exception.getMessage()); }
+            finally { clipboard.resume(); capturing = false; }
+            if (accepted[0]) requestAutoSave(true);
+            else if (pendingSave || afterSave != null) saveLatest();
         }
     }
 
-    private void save(Runnable afterSave) {
-        if (saving) return;
-        Config candidate = draft();
-        rows.forEach(row -> row.text.setBorder(row.normalTextBorder));
+    private void requestAutoSave(boolean immediate) {
+        if (!ready || exiting) return;
+        userSaveRequested = true;
+        pendingSave = true;
+        setSaveStatus("等待保存…", false);
+        if (confirmingText || capturing) return;
+        if (immediate) { saveTimer.stop(); saveLatest(); }
+        else scheduleAutoSave();
+    }
+
+    private void scheduleAutoSave() {
+        if (!capturing && !exiting) saveTimer.restart();
+    }
+
+    private void flushAutoSave(Runnable action) {
+        if (exiting || afterSave != null) return;
+        saveTimer.stop();
+        afterSave = action;
+        if (action != null) frame.setEnabled(false);
+        for (Row row : rows) row.text.getInputContext().endComposition();
+        SwingUtilities.invokeLater(() -> {
+            confirmingText = true;
+            try { for (Row row : rows) row.readText(true); }
+            finally { confirmingText = false; }
+            saveTimer.stop();
+            pendingSave = true;
+            saveLatest();
+        });
+    }
+
+    private void saveLatest() {
+        if (!ready || exiting) return;
+        if (saving || capturing || confirmingText) { pendingSave = true; return; }
+        saveTimer.stop();
+        pendingSave = false;
+        Config candidate = buildSaveCandidate();
+        boolean syncStartup = userSaveRequested && (!startupSynced || candidate.autoStart() != saved.autoStart());
+        if (candidate.equals(saved) && !migrationPending && !syncStartup && (store.exists() || !userSaveRequested)) {
+            finishAutoSave();
+            return;
+        }
+        rows.forEach(row -> { row.text.setBorder(row.normalTextBorder); row.text.setToolTipText(null); });
         try { candidate.validate(); }
-        catch (Exception exception) { markError(exception.getMessage()); return; }
-        saving = true; frame.setEnabled(false); setStatus("正在保存…");
+        catch (Exception exception) { saveFailed(candidate, exception.getMessage()); return; }
+        saving = true;
+        setSaveStatus("正在保存…", false);
         new SwingWorker<Void, Void>() {
             @Override protected Void doInBackground() {
                 hotkeys.apply(candidate, () -> {
-                    String previous = startup.snapshot();
-                    try { startup.set(candidate.autoStart()); store.save(candidate); }
+                    String previous = syncStartup ? startup.snapshot() : null;
+                    try {
+                        if (syncStartup) startup.set(candidate.autoStart());
+                        store.save(candidate);
+                    }
                     catch (Exception exception) {
-                        try { startup.restore(previous); }
+                        try { if (syncStartup) startup.restore(previous); }
                         catch (Exception rollback) {
                             exception.addSuppressed(rollback);
                             throw new IllegalStateException(exception.getMessage() + "；恢复自启动设置失败，请检查启动设置", exception);
@@ -330,28 +455,85 @@ public final class CopyWords {
                 return null;
             }
             @Override protected void done() {
-                saving = false; frame.setEnabled(true);
-                try { get(); saved = candidate; migrationPending = false; setStatus("已保存，快捷键已生效，可在目标输入框触发自动粘贴。"); if (afterSave != null) afterSave.run(); }
+                saving = false;
+                try {
+                    get(); saved = candidate; migrationPending = false;
+                    saveCompleted = true;
+                    if (syncStartup) startupSynced = true;
+                }
                 catch (Exception exception) {
                     Throwable cause = exception.getCause() == null ? exception : exception.getCause();
-                    cause.printStackTrace(); markError(cause.getMessage());
+                    cause.printStackTrace(); saveFailed(candidate, cause.getMessage());
+                    openPendingCapture();
+                    if (pendingSave && !candidate.equals(buildSaveCandidate()) && !saveTimer.isRunning()) saveLatest();
+                    return;
                 }
+                if (openPendingCapture()) return;
+                if (pendingSave || !candidate.equals(buildSaveCandidate())
+                        || userSaveRequested && !startupSynced) {
+                    setSaveStatus("等待保存…", false);
+                    if (!saveTimer.isRunning() || afterSave != null) saveLatest();
+                } else finishAutoSave();
             }
         }.execute();
     }
 
-    private void markError(String message) {
+    private boolean openPendingCapture() {
+        Row row = pendingCapture;
+        pendingCapture = null;
+        if (row == null || !rows.contains(row) || afterSave != null) return false;
+        capture(row);
+        if (!saving && !capturing && afterSave == null && !pendingSave) finishAutoSave();
+        return true;
+    }
+
+    private void finishAutoSave() {
+        boolean emptyDraft = rows.stream().anyMatch(row -> row.included && row.text.getText().isEmpty()
+                && !row.saveableText.isEmpty());
+        setSaveStatus(emptyDraft ? "文本暂为空；离开文本框后确认清空"
+                : saveCompleted ? "已自动保存" : "设置会自动保存", false);
+        Runnable action = afterSave;
+        afterSave = null;
+        if (action != null) { frame.setEnabled(true); action.run(); }
+    }
+
+    private void setSaveStatus(String message, boolean failed) {
+        saveStatus.setText(failed ? "保存失败，请重试" : message.startsWith("文本暂为空") ? "空文本待确认" : message);
+        saveStatus.setToolTipText(message);
+        saveStatus.setForeground(failed ? new Color(190, 55, 55) : new Color(90, 100, 110));
+        retry.setVisible(failed);
+    }
+
+    private void saveFailed(Config candidate, String message) {
+        if (message == null) message = "保存失败，请检查配置目录是否可写。";
         var match = Pattern.compile("第 (\\d+) 行").matcher(message);
         if (match.find()) {
             int index = Integer.parseInt(match.group(1)) - 1;
-            if (index >= 0 && index < rows.size()) {
-                Row row = rows.get(index);
-                row.text.setBorder(new CompoundBorder(new LineBorder(new Color(190, 55, 55), 2), new EmptyBorder(0, 8, 0, 0)));
-                rowsPanel.scrollRectToVisible(row.panel.getBounds());
+            if (index >= 0 && index < candidate.entries().size()) {
+                String id = candidate.entries().get(index).id();
+                for (Row row : rows) if (row.id.equals(id)) {
+                    row.text.setBorder(new CompoundBorder(new LineBorder(new Color(190, 55, 55), 2), new EmptyBorder(0, 8, 0, 0)));
+                    row.text.setToolTipText(message);
+                    rowsPanel.scrollRectToVisible(row.panel.getBounds());
+                    break;
+                }
             }
         }
-        setStatus("保存失败，上次生效的内容保持不变");
-        showError(message);
+        setSaveStatus("保存失败，上次生效的内容保持不变；" + message.replace('\n', ' '), true);
+        boolean closing = afterSave != null;
+        afterSave = null;
+        frame.setEnabled(true);
+        if (closing) {
+            showWindow();
+            if (closingForExit) {
+                closingForExit = false;
+                int answer = JOptionPane.showOptionDialog(frame, "退出前自动保存失败：\n" + message, "CopyWords",
+                        JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null,
+                        new String[] {"重试并退出", "丢弃未保存修改并退出", "取消"}, "重试并退出");
+                if (answer == 0) requestExit();
+                else if (answer == 1) exit();
+            } else showError("自动保存失败，窗口保持打开：\n" + message);
+        }
     }
 
     private void setupTray() {
@@ -456,20 +638,14 @@ public final class CopyWords {
     private void showError(String message) { JOptionPane.showMessageDialog(frame, message, "CopyWords", JOptionPane.WARNING_MESSAGE); }
 
     private void requestExit() {
-        if (saving || exiting) return;
-        if (migrationPending || !draft().equals(saved)) {
-            showWindow();
-            int answer = JOptionPane.showOptionDialog(frame, "还有未保存的修改，退出前如何处理？", "CopyWords",
-                    JOptionPane.DEFAULT_OPTION, JOptionPane.QUESTION_MESSAGE, null,
-                    new String[] {"保存并退出", "丢弃并退出", "取消"}, "保存并退出");
-            if (answer == 0) { save(this::exit); return; }
-            if (answer != 1) return;
-        }
-        exit();
+        if (exiting || afterSave != null) return;
+        closingForExit = true;
+        flushAutoSave(this::exit);
     }
 
     private void exit() {
         exiting = true;
+        saveTimer.stop();
         clipboard.pause();
         saveWindowState();
         hotkeys.close(); clipboard.close();

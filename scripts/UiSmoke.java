@@ -54,12 +54,18 @@ public class UiSmoke {
             if (window instanceof JDialog candidate && candidate.isShowing() && title.equals(candidate.getTitle())) return candidate;
         return null;
     }
-    static void save(Path config) throws Exception {
-        onEdt(() -> button(frame, "保存").doClick());
+    static void awaitAutoSave(Path config) throws Exception {
         waitFor(() -> {
-            try { return !(Boolean) field(app, "saving") && Files.exists(config); }
+            try {
+                var idle = new AtomicReference<Boolean>();
+                onEdt(() -> idle.set(!(Boolean) uncheckedField(app, "saving")
+                        && !(Boolean) uncheckedField(app, "pendingSave")
+                        && !((javax.swing.Timer) uncheckedField(app, "saveTimer")).isRunning()));
+                return idle.get() && Files.exists(config)
+                        && new ConfigStore(config).load().equals(field(app, "saved"));
+            }
             catch (Exception exception) { throw new RuntimeException(exception); }
-        }, "save did not finish");
+        }, "automatic save did not finish");
     }
     static void capture(Object row, String outcome) throws Exception {
         var shortcut = (JButton) field(row, "shortcut");
@@ -139,7 +145,6 @@ public class UiSmoke {
 
     public static void main(String[] args) throws Exception {
         String suffix = args.length == 0 ? "normal" : args[0];
-        boolean saveOnExit = args.length > 1 && args[1].equals("save");
         Path home = Files.createTempDirectory(Path.of("temp").toAbsolutePath(), "ui-smoke-");
         Path config = home.resolve("config.xml");
         Path jar = Path.of("dist/CopyWords.jar").toAbsolutePath();
@@ -166,6 +171,7 @@ public class UiSmoke {
             });
             robot = new Robot(); robot.setAutoDelay(70);
             check(frame.isVisible() && rows().size() == 5, "first launch shows five rows");
+            check(button(frame, "保存") == null, "manual save button removed");
             check(frame.getWidth() == 760 && frame.getHeight() == Math.min(1280,
                     GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds().height),
                     "default width unchanged and default height doubled within screen bounds");
@@ -186,19 +192,20 @@ public class UiSmoke {
                 closeToTray.setSelected(true);
                 frame.dispatchEvent(new WindowEvent(frame, WindowEvent.WINDOW_CLOSING));
             });
-            check(!frame.isVisible() && !Files.exists(config), "checking close-to-tray hides immediately without saving config");
+            waitFor(() -> !frame.isVisible(), "close-to-tray did not finish saving and hide");
+            check(new ConfigStore(config).load().closeToTray(), "close-to-tray automatically saves preference before hiding");
             onEdt(() -> ((JMenuItem) ((JPopupMenu) uncheckedField(app, "trayMenu")).getComponent(0)).doClick());
             onEdt(() -> closeToTray.setSelected(false));
+            awaitAutoSave(config);
             SwingUtilities.invokeLater(() -> {
                 try {
-                    Method markError = CopyWords.class.getDeclaredMethod("markError", String.class);
-                    markError.setAccessible(true); markError.invoke(app, "第 1 行测试错误");
+                    Method markError = CopyWords.class.getDeclaredMethod("saveFailed", Config.class, String.class);
+                    markError.setAccessible(true); markError.invoke(app, uncheckedField(app, "saved"), "第 1 行测试错误");
                 } catch (Exception exception) { throw new RuntimeException(exception); }
             });
-            waitFor(() -> dialog("CopyWords") != null, "error dialog missing");
+            waitFor(() -> button(frame, "重试").isVisible(), "inline save error missing");
             check(firstText.getInsets().left == 10, "error border retains eight pixels of inner padding");
             screenshot(suffix + "-error");
-            onEdt(() -> dialog("CopyWords").dispose());
             systemClipboard.setContents(new StringSelection("capture sentinel"), null);
             Hotkey original = (Hotkey) field(first, "hotkey");
             capture(first, "取消");
@@ -215,42 +222,41 @@ public class UiSmoke {
             });
             check(rows().size() == 6, "add creates sixth row");
             check(new Hotkey(Hotkey.CAPS, '1').equals(field(rows().getLast(), "hotkey")), "add chooses first unused Caps digit");
-            save(config);
+            awaitAutoSave(config);
             Config persisted = new ConfigStore(config).load();
             check(firstText.getBorder() == field(first, "normalTextBorder"), "successful save restores padded normal border");
-            check(persisted.entries().size() == 6 && persisted.entries().getFirst().text().equals("  测试中文  "),
-                    "save preserves changed shortcut, ordered rows, Chinese and spaces");
+            check(persisted.entries().size() == 5 && persisted.entries().getFirst().text().equals("  测试中文  "),
+                    "automatic save preserves Chinese and spaces and excludes new blank row");
             check(persisted.entries().getFirst().hotkey().equals(new Hotkey(6, '4')), "changed binding persisted");
             Object last = rows().getLast();
             onEdt(() -> {
                 try { button((Container) field(last, "panel"), "删除").doClick(); }
                 catch (Exception exception) { throw new RuntimeException(exception); }
             });
-            save(config);
+            awaitAutoSave(config);
             check(new ConfigStore(config).load().entries().size() == 5, "delete and save remove entry");
             onEdt(() -> frame.setBounds(80, 70, 660, 440));
             Thread.sleep(200);
             screenshot(suffix + "-resized");
             check(!findScroll(frame).getHorizontalScrollBar().isVisible(), "no horizontal scrollbar at minimum width");
             check(closeToTray.getWidth() >= closeToTray.getPreferredSize().width, "close-to-tray label fits at minimum width");
-            check(button(frame, "保存").isShowing() && button(frame, "保存").getHeight() == 34, "save button remains visible at minimum size");
+            check(((JLabel) field(app, "saveStatus")).isShowing(), "automatic save status visible at minimum size");
             check(frame.getGraphicsConfiguration().getDefaultTransform().getScaleX() > 0,
                     "rendered DPI scale=" + frame.getGraphicsConfiguration().getDefaultTransform().getScaleX());
             Rectangle normalBounds = frame.getBounds();
-            byte[] savedTextConfig = Files.readAllBytes(config);
             onEdt(() -> {
                 try {
-                    ((JTextField) field(first, "text")).setText("unsaved geometry draft");
+                    ((JTextField) field(first, "text")).setText("托盘前的新内容");
                     closeToTray.setSelected(true);
                 }
                 catch (Exception exception) { throw new RuntimeException(exception); }
                 frame.dispatchEvent(new WindowEvent(frame, WindowEvent.WINDOW_CLOSING));
             });
-            check(!frame.isVisible(), "close hides window to tray");
+            waitFor(() -> !frame.isVisible(), "close did not hide window to tray");
             check(WindowState.load(home.resolve("window-state.xml")).bounds().equals(normalBounds),
                     "closing to tray automatically saves window position and size");
-            check(java.util.Arrays.equals(savedTextConfig, Files.readAllBytes(config)),
-                    "saving window geometry does not save unsaved text draft");
+            check("托盘前的新内容".equals(new ConfigStore(config).load().entries().getFirst().text()),
+                    "closing to tray flushes latest text along with independent geometry");
             systemClipboard.setContents(new StringSelection("hidden sentinel"), null);
             var pasteEditor = new JTextArea();
             onEdt(() -> {
@@ -270,14 +276,14 @@ public class UiSmoke {
             robot.keyPress(KeyEvent.VK_CONTROL); robot.keyPress(KeyEvent.VK_SHIFT); robot.keyPress(KeyEvent.VK_4);
             robot.keyRelease(KeyEvent.VK_4); robot.keyRelease(KeyEvent.VK_SHIFT); robot.keyRelease(KeyEvent.VK_CONTROL);
             waitFor(() -> {
-                try { return "  测试中文  ".equals(systemClipboard.getData(DataFlavor.stringFlavor)); }
+                try { return "托盘前的新内容".equals(systemClipboard.getData(DataFlavor.stringFlavor)); }
                 catch (Exception exception) { return false; }
             }, "hidden-window hotkey did not copy");
             waitFor(() -> {
                 var text = new AtomicReference<String>();
                 try { onEdt(() -> text.set(pasteEditor.getText())); }
                 catch (Exception exception) { throw new RuntimeException(exception); }
-                return "  测试中文  ".equals(text.get());
+                return "托盘前的新内容".equals(text.get());
             }, "hidden-window hotkey did not paste into test editor");
             check(!frame.isVisible(), "hotkey copies and pastes correct text while app stays hidden in tray");
             onEdt(pasteTarget::dispose);
@@ -310,7 +316,7 @@ public class UiSmoke {
             check(frame.isVisible(), "tray menu reopens settings");
             check(frame.getBounds().equals(normalBounds), "tray reopen retains position and size");
             onEdt(() -> firstText.setText("  测试中文  "));
-            save(config);
+            awaitAutoSave(config);
             check(new ConfigStore(config).load().closeToTray(), "saving remembers close-to-tray preference");
             onEdt(() -> {
                 try {
@@ -328,6 +334,7 @@ public class UiSmoke {
             waitFor(() -> (frame.getExtendedState() & Frame.MAXIMIZED_BOTH) != 0, "maximize failed");
             Thread.sleep(400);
             onEdt(() -> frame.dispatchEvent(new WindowEvent(frame, WindowEvent.WINDOW_CLOSING)));
+            waitFor(() -> !frame.isVisible(), "maximized close did not finish");
             WindowState maximizedState = WindowState.load(home.resolve("window-state.xml"));
             check(maximizedState.maximized() && maximizedState.bounds().equals(normalBounds),
                     "closing maximized window preserves normal bounds and maximized state");
@@ -359,15 +366,6 @@ public class UiSmoke {
             Thread.sleep(400);
             check(frame.getBounds().equals(normalBounds), "restoring from maximized retains saved normal bounds");
             Object reloaded = rows().getFirst();
-            onEdt(() -> {
-                try { ((JTextField) field(reloaded, "text")).setText("unsaved draft"); }
-                catch (Exception exception) { throw new RuntimeException(exception); }
-            });
-            onEdt(() -> restartedCloseToTray.setSelected(false));
-            SwingUtilities.invokeLater(() -> frame.dispatchEvent(new WindowEvent(frame, WindowEvent.WINDOW_CLOSING)));
-            waitFor(() -> dialog("CopyWords") != null, "unsaved exit prompt missing");
-            onEdt(() -> button(dialog("CopyWords"), "取消").doClick());
-            check(frame.isVisible() && !(Boolean) field(app, "exiting"), "canceling unsaved-exit prompt keeps app running");
             TrayIcon restartedTray = (TrayIcon) field(app, "tray");
             onEdt(() -> {
                 restartedCloseToTray.setSelected(true);
@@ -375,16 +373,24 @@ public class UiSmoke {
                     Field trayField = CopyWords.class.getDeclaredField("tray"); trayField.setAccessible(true); trayField.set(app, null);
                 } catch (Exception exception) { throw new RuntimeException(exception); }
             });
-            SwingUtilities.invokeLater(() -> frame.dispatchEvent(new WindowEvent(frame, WindowEvent.WINDOW_CLOSING)));
-            waitFor(() -> dialog("CopyWords") != null, "missing tray did not fall back to exit prompt");
+            // Hold the config file so the missing-tray exit must use the save-failure flow.
+            try (var held = FileChannel.open(config, StandardOpenOption.READ, com.sun.nio.file.ExtendedOpenOption.NOSHARE_DELETE)) {
+                onEdt(() -> {
+                    try { ((JTextField) field(reloaded, "text")).setText("exit draft"); }
+                    catch (Exception exception) { throw new RuntimeException(exception); }
+                });
+                SwingUtilities.invokeLater(() -> frame.dispatchEvent(new WindowEvent(frame, WindowEvent.WINDOW_CLOSING)));
+                waitFor(() -> dialog("CopyWords") != null, "missing tray did not use save-failure exit flow");
+                onEdt(() -> button(dialog("CopyWords"), "取消").doClick());
+            }
             onEdt(() -> {
-                button(dialog("CopyWords"), "取消").doClick();
                 try {
                     Field trayField = CopyWords.class.getDeclaredField("tray"); trayField.setAccessible(true); trayField.set(app, restartedTray);
                 } catch (Exception exception) { throw new RuntimeException(exception); }
                 restartedCloseToTray.setSelected(false);
             });
-            check(frame.isVisible(), "unavailable tray uses safe exit flow and supports cancel");
+            check(frame.isVisible() && frame.isEnabled(), "failed missing-tray exit supports cancel and resumes editing");
+            awaitAutoSave(config);
             Files.writeString(Path.of("logs/ui-" + suffix + "-profile.txt"), home.toString());
             onEdt(() -> frame.setBounds(100, 90, 700, 480));
             Thread.sleep(200);
@@ -421,9 +427,11 @@ public class UiSmoke {
                 catch (Exception ignored) { }
             }
         }));
-        SwingUtilities.invokeLater(() -> frame.dispatchEvent(new WindowEvent(frame, WindowEvent.WINDOW_CLOSING)));
-        waitFor(() -> dialog("CopyWords") != null, "discard-exit prompt missing");
-        onEdt(() -> button(dialog("CopyWords"), saveOnExit ? "保存并退出" : "丢弃并退出").doClick());
+        SwingUtilities.invokeLater(() -> {
+            try { ((JTextField) field(rows().getFirst(), "text")).setText("退出前最后修改"); }
+            catch (Exception exception) { throw new RuntimeException(exception); }
+            frame.dispatchEvent(new WindowEvent(frame, WindowEvent.WINDOW_CLOSING));
+        });
     }
 
     static Object uncheckedField(Object object, String name) {

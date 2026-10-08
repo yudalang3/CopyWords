@@ -75,6 +75,18 @@ class ConfigTest {
         assertEquals(previous, store.load());
     }
 
+    @Test void confirmedEmptyTextKeepsShortcutButDisablesEntryAfterReload() throws Exception {
+        Hotkey key = new Hotkey(Hotkey.CAPS, '1');
+        Entry entry = Entry.create("原内容", key);
+        var store = new ConfigStore(directory.resolve("config.xml"));
+        store.save(new Config(List.of(entry), false, false, false));
+        store.save(new Config(List.of(new Entry(entry.id(), "", key)), false, false, false));
+        Entry reloaded = store.load().entries().getFirst();
+        assertEquals(entry.id(), reloaded.id());
+        assertEquals(key, reloaded.hotkey());
+        assertFalse(reloaded.active());
+    }
+
     @Test void closeToTrayPreferenceRoundTripsBothStates() throws Exception {
         var store = new ConfigStore(directory.resolve("config.xml"));
         for (boolean closeToTray : new boolean[] {true, false}) {
@@ -155,7 +167,9 @@ class ConfigTest {
         String advice = GlobalHotkeys.registrationAdvice(new Hotkey(Hotkey.ALT, '1'), 1409);
         assertTrue(advice.contains("已被其他程序占用"));
         assertTrue(advice.contains("Caps + 1"));
-        assertTrue(advice.contains("保存"));
+        assertTrue(advice.contains("自动保存"));
+        assertTrue(advice.contains("重试"));
+        assertFalse(advice.contains("点击“保存”"));
         assertFalse(advice.contains("1409"));
     }
 }

@@ -117,8 +117,8 @@ public final class GlobalHotkeys implements AutoCloseable {
     static String registrationAdvice(Hotkey key, int error) {
         String alternative = new Hotkey(Hotkey.CAPS, key.key()).toString();
         String reason = error == 1409 ? "“" + key + "”已被其他程序占用，暂时无法使用。" : "Windows 无法启用“" + key + "”。";
-        return reason + "\n请点击这一行的快捷键按钮，改为“" + alternative + "”（推荐），然后点击“保存”。"
-                + "\n如需保留原快捷键，请先在其他快捷键软件中关闭相同组合，再回到 CopyWords 重新保存。";
+        return reason + "\n请点击这一行的快捷键按钮，改为“" + alternative + "”（推荐），确认后会自动保存并生效。"
+                + "\n如需保留原快捷键，请先在其他快捷键软件中关闭相同组合，再回到 CopyWords 点击“重试”。";
     }
     private void publishCaps() {
         var entries = new LinkedHashMap<Hotkey, String>();
