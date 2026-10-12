@@ -1,6 +1,7 @@
 package cn.copywords;
 
 import javax.swing.*;
+import javax.imageio.ImageIO;
 import javax.swing.border.*;
 import javax.swing.plaf.FontUIResource;
 import javax.swing.event.PopupMenuEvent;
@@ -10,6 +11,8 @@ import javax.swing.event.DocumentListener;
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.image.BufferedImage;
+import java.awt.image.BaseMultiResolutionImage;
+import java.io.IOException;
 import java.nio.channels.*;
 import java.nio.file.*;
 import java.util.*;
@@ -17,6 +20,7 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 public final class CopyWords {
+    private static final List<BufferedImage> ICONS = loadIcons();
     private final JFrame frame = new JFrame("CopyWords");
     private final JPanel rowsPanel = new JPanel();
     private final List<Row> rows = new ArrayList<>();
@@ -87,7 +91,7 @@ public final class CopyWords {
                 } else requestExit();
             }
         });
-        frame.setIconImage(icon());
+        frame.setIconImages(ICONS);
         JPanel content = new JPanel(new BorderLayout(0, 20));
         content.setBorder(new EmptyBorder(24, 26, 20, 26));
         JPanel heading = new JPanel(new BorderLayout(0, 8));
@@ -566,7 +570,8 @@ public final class CopyWords {
             @Override public void popupMenuWillBecomeInvisible(PopupMenuEvent event) { trayMenuOwner.setVisible(false); }
             @Override public void popupMenuCanceled(PopupMenuEvent event) { trayMenuOwner.setVisible(false); }
         });
-        tray = new TrayIcon(icon(), "CopyWords — 常用文本快捷粘贴");
+        tray = new TrayIcon(new BaseMultiResolutionImage(ICONS.toArray(Image[]::new)),
+                "CopyWords — 常用文本快捷粘贴");
         tray.setImageAutoSize(true);
         tray.addActionListener(event -> SwingUtilities.invokeLater(this::showWindow));
         tray.addMouseListener(new MouseAdapter() {
@@ -611,15 +616,20 @@ public final class CopyWords {
         return new Font(Font.DIALOG, Font.PLAIN, 14);
     }
 
-    private static BufferedImage icon() {
-        var image = new BufferedImage(48, 48, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D graphics = image.createGraphics();
-        graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        graphics.setColor(new Color(40, 95, 155)); graphics.fillRoundRect(2, 2, 44, 44, 12, 12);
-        graphics.setColor(Color.WHITE); graphics.setStroke(new BasicStroke(3));
-        graphics.drawRoundRect(13, 10, 22, 27, 3, 3); graphics.drawLine(18, 18, 30, 18);
-        graphics.drawLine(18, 24, 30, 24); graphics.drawLine(18, 30, 26, 30);
-        graphics.dispose(); return image;
+    private static List<BufferedImage> loadIcons() {
+        var images = new ArrayList<BufferedImage>();
+        for (int size : new int[] {16, 24, 32, 48, 64, 128, 256}) {
+            String resource = "/cn/copywords/icons/copywords-" + size + ".png";
+            try (var stream = CopyWords.class.getResourceAsStream(resource)) {
+                if (stream == null) throw new IOException("缺少图标资源：" + resource);
+                BufferedImage image = ImageIO.read(stream);
+                if (image == null) throw new IOException("无法解码图标资源：" + resource);
+                images.add(image);
+            } catch (IOException exception) {
+                throw new IllegalStateException("无法加载 CopyWords 图标", exception);
+            }
+        }
+        return List.copyOf(images);
     }
 
     private void showWindow() {
