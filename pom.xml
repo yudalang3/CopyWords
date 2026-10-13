@@ -1,6 +1,6 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>cn.copywords</groupId><artifactId>copywords</artifactId><version>0.1.0</version>
+  <groupId>cn.copywords</groupId><artifactId>copywords</artifactId><version>0.1.1</version>
   <licenses><license><name>GNU General Public License v3.0</name><url>https://www.gnu.org/licenses/gpl-3.0.html</url><distribution>repo</distribution></license></licenses>
   <properties><maven.compiler.release>25</maven.compiler.release><project.build.sourceEncoding>UTF-8</project.build.sourceEncoding></properties>
   <dependencies>
