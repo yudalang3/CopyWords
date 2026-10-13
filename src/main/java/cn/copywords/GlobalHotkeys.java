@@ -4,6 +4,7 @@ import com.sun.jna.platform.win32.*;
 import com.sun.jna.platform.win32.WinDef.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 public final class GlobalHotkeys implements AutoCloseable {
@@ -17,6 +18,26 @@ public final class GlobalHotkeys implements AutoCloseable {
     private int threadId, nextId = 1;
     private boolean suspended;
     private volatile boolean closed;
+
+    static final class Command<T> implements Runnable {
+        private final Callable<T> action;
+        private final AtomicBoolean claimed = new AtomicBoolean();
+        final CompletableFuture<T> result = new CompletableFuture<>();
+
+        Command(Callable<T> action) { this.action = action; }
+
+        @Override public void run() {
+            if (!claimed.compareAndSet(false, true)) return;
+            try { result.complete(action.call()); }
+            catch (Throwable exception) { result.completeExceptionally(exception); }
+        }
+
+        boolean failBeforeRun(Throwable exception) {
+            if (!claimed.compareAndSet(false, true)) return false;
+            result.completeExceptionally(exception);
+            return true;
+        }
+    }
 
     private static final class Binding {
         final int id;
@@ -76,18 +97,17 @@ public final class GlobalHotkeys implements AutoCloseable {
 
     private <T> T invoke(Callable<T> action) {
         if (closed) throw new IllegalStateException("快捷键服务已关闭");
-        var future = new CompletableFuture<T>();
-        Runnable command = () -> {
-            if (closed) { future.completeExceptionally(new IllegalStateException("快捷键服务已关闭")); return; }
-            try { future.complete(action.call()); }
-            catch (Throwable exception) { future.completeExceptionally(exception); }
-        };
+        var command = new Command<T>(() -> {
+            if (closed) throw new IllegalStateException("快捷键服务已关闭");
+            return action.call();
+        });
         commands.add(command);
         if (User32.INSTANCE.PostThreadMessage(threadId, COMMAND, new WPARAM(0), new LPARAM(0)) == 0) {
-            commands.remove(command);
-            throw new IllegalStateException("无法通知快捷键线程，错误 " + Kernel32.INSTANCE.GetLastError());
+            var exception = new IllegalStateException("无法通知快捷键线程，错误 " + Kernel32.INSTANCE.GetLastError());
+            // An earlier wakeup may already have claimed this command. Return its actual result.
+            if (command.failBeforeRun(exception)) commands.remove(command);
         }
-        try { return future.join(); }
+        try { return command.result.join(); }
         catch (CompletionException exception) {
             Throwable cause = exception.getCause();
             throw new IllegalStateException(cause.getMessage(), cause);

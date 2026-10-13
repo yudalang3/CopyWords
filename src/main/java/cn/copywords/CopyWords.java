@@ -42,7 +42,7 @@ public final class CopyWords {
     private TrayIcon tray;
     private JPopupMenu trayMenu;
     private JDialog trayMenuOwner;
-    private boolean saving, exiting, migrationPending;
+    private boolean saving, exiting;
     private boolean ready, capturing, confirmingText, pendingSave, userSaveRequested, startupSynced, saveCompleted, closingForExit;
     private Row pendingCapture;
     private Runnable afterSave;
@@ -65,18 +65,12 @@ public final class CopyWords {
             loadWarning = "读取配置失败，已显示示例条目；原文件未修改。\n" + exception.getMessage();
             exception.printStackTrace();
         }
-        migrationPending = store.upgraded();
-        if (migrationPending) firstRun = true;
         clipboard = new ClipboardService(this::setStatus);
         hotkeys = new GlobalHotkeys(clipboard::paste);
         buildWindow();
         setupTray();
         var warnings = hotkeys.start(saved);
         ready = true;
-        if (migrationPending) {
-            setStatus("默认快捷键已更新为 Caps + 数字，文本已保留。");
-            SwingUtilities.invokeLater(this::saveLatest);
-        }
         if (firstRun || !saved.startHidden() || tray == null || !warnings.isEmpty()) showWindow();
         if (loadWarning != null) showError(loadWarning);
         if (!warnings.isEmpty()) showError(String.join("\n", warnings));
@@ -430,7 +424,7 @@ public final class CopyWords {
         pendingSave = false;
         Config candidate = buildSaveCandidate();
         boolean syncStartup = userSaveRequested && (!startupSynced || candidate.autoStart() != saved.autoStart());
-        if (candidate.equals(saved) && !migrationPending && !syncStartup && (store.exists() || !userSaveRequested)) {
+        if (candidate.equals(saved) && !syncStartup && (store.exists() || !userSaveRequested)) {
             finishAutoSave();
             return;
         }
@@ -461,7 +455,7 @@ public final class CopyWords {
             @Override protected void done() {
                 saving = false;
                 try {
-                    get(); saved = candidate; migrationPending = false;
+                    get(); saved = candidate;
                     saveCompleted = true;
                     if (syncStartup) startupSynced = true;
                 }
@@ -588,9 +582,16 @@ public final class CopyWords {
     }
 
     private void showTrayMenu(int x, int y) {
+        showTrayMenu(x, y, usableScreens());
+    }
+
+    private void showTrayMenu(int x, int y, List<Rectangle> screens) {
         hideTrayMenu();
+        if (screens.isEmpty()) {
+            System.err.println("暂无可用显示器，暂时无法显示托盘菜单，请稍后重试。");
+            return;
+        }
         Dimension size = trayMenu.getPreferredSize();
-        List<Rectangle> screens = usableScreens();
         Rectangle screen = screens.stream().filter(bounds -> bounds.contains(x, y)).findFirst().orElse(screens.getFirst());
         int left = Math.max(screen.x, Math.min(x, screen.x + screen.width - size.width));
         int top = Math.max(screen.y, Math.min(y, screen.y + screen.height - size.height));

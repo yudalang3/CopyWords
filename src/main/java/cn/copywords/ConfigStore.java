@@ -7,10 +7,8 @@ import java.util.Properties;
 
 public final class ConfigStore {
     private final Path path;
-    private boolean upgraded;
     public ConfigStore(Path path) { this.path = path; }
     public boolean exists() { return Files.exists(path); }
-    public boolean upgraded() { return upgraded; }
 
     public Config load() throws IOException {
         var properties = new Properties();
@@ -29,20 +27,23 @@ public final class ConfigStore {
                 if (id == null || text == null) throw new IllegalArgumentException("条目不完整");
                 entries.add(new Entry(id, text, hotkey));
             }
-            var config = new Config(entries, Boolean.parseBoolean(properties.getProperty("autoStart", "true")),
-                    Boolean.parseBoolean(properties.getProperty("startHidden", "true")),
-                    Boolean.parseBoolean(properties.getProperty("closeToTray", "false")));
-            config.validateLoaded();
-            Config current = properties.containsKey("capsDefaultsVersion") ? config : config.upgradeLegacyDefaults();
-            upgraded = !current.equals(config);
-            return current;
+            var config = new Config(entries, readBoolean(properties, "autoStart"),
+                    readBoolean(properties, "startHidden"), readBoolean(properties, "closeToTray"));
+            config.validate();
+            return config;
         } catch (RuntimeException exception) { throw new IOException("配置文件内容无效", exception); }
+    }
+
+    private static boolean readBoolean(Properties properties, String name) {
+        String value = properties.getProperty(name);
+        if (!"true".equals(value) && !"false".equals(value))
+            throw new IllegalArgumentException("配置选项缺失或无效：" + name);
+        return Boolean.parseBoolean(value);
     }
 
     public void save(Config config) throws IOException {
         config.validate();
         var properties = new Properties();
-        properties.setProperty("capsDefaultsVersion", "2");
         properties.setProperty("count", Integer.toString(config.entries().size()));
         properties.setProperty("autoStart", Boolean.toString(config.autoStart()));
         properties.setProperty("startHidden", Boolean.toString(config.startHidden()));

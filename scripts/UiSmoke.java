@@ -300,6 +300,14 @@ public class UiSmoke {
                     screen.width - screenInsets.left - screenInsets.right,
                     screen.height - screenInsets.top - screenInsets.bottom);
             onEdt(() -> {
+                try {
+                    Method popup = CopyWords.class.getDeclaredMethod("showTrayMenu", int.class, int.class, List.class);
+                    popup.setAccessible(true);
+                    popup.invoke(app, usable.x, usable.y, List.of());
+                } catch (Exception exception) { throw new RuntimeException(exception); }
+            });
+            check(!trayMenu.isVisible() && !menuOwner.isVisible(), "unavailable screens skip tray popup without an exception");
+            onEdt(() -> {
                 MouseEvent rightClick = new MouseEvent(frame, MouseEvent.MOUSE_RELEASED, System.currentTimeMillis(), 0,
                         usable.x + usable.width - 1, usable.y + usable.height - 1,
                         usable.x + usable.width - 1, usable.y + usable.height - 1, 1, true, MouseEvent.BUTTON3);

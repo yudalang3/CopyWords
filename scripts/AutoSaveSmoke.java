@@ -83,14 +83,7 @@ class AutoSaveSmoke {
             previousStartup = startup.snapshot();
             if (mode.equals("corrupt")) Files.writeString(config, "broken xml");
             else if (!mode.equals("fresh")) {
-                Hotkey first = mode.equals("legacy") ? new Hotkey(Hotkey.ALT, '1') : FIRST_KEY;
-                store.save(new Config(List.of(Entry.create("原内容", first), Entry.create("第二行", SECOND_KEY)), false, false, false));
-                if (mode.equals("legacy")) {
-                    var properties = new Properties();
-                    try (var input = Files.newInputStream(config)) { properties.loadFromXML(input); }
-                    properties.remove("capsDefaultsVersion");
-                    try (var output = Files.newOutputStream(config)) { properties.storeToXML(output, "legacy", "UTF-8"); }
-                }
+                store.save(new Config(List.of(Entry.create("原内容", FIRST_KEY), Entry.create("第二行", SECOND_KEY)), false, false, false));
             }
             channel = FileChannel.open(home.resolve("instance.lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
             lock = channel.tryLock();
@@ -367,7 +360,7 @@ class AutoSaveSmoke {
         }
     }
 
-    static void compositionAndCompatibility() throws Exception {
+    static void compositionAndInitialProfiles() throws Exception {
         try (var profile = new Profile("seeded")) {
             JTextField input = profile.text(0);
             byte[] original = Files.readAllBytes(profile.config);
@@ -390,6 +383,11 @@ class AutoSaveSmoke {
             check("已确认中文".equals(profile.store.load().entries().getFirst().text()), "confirmed IME input automatically saved");
         }
         try (var profile = new Profile("fresh")) {
+            check(edt(() -> "AI4S".equals(profile.text(0).getText())
+                    && "人生价值".equals(profile.text(1).getText())
+                    && "xxx@example.com".equals(profile.text(2).getText())
+                    && new Hotkey(Hotkey.CAPS, '1').equals(field(profile.row(0), "hotkey"))),
+                    "fresh profile displays current default texts and Caps binding");
             Thread.sleep(600);
             check(!Files.exists(profile.config) && profile.startup.snapshot() == null, "untouched first launch does not save or register startup");
         }
@@ -397,13 +395,6 @@ class AutoSaveSmoke {
             Thread.sleep(600);
             check("broken xml".equals(Files.readString(profile.config)) && profile.startup.snapshot() == null,
                     "corrupt file preserved during startup");
-        }
-        try (var profile = new Profile("legacy")) {
-            profile.awaitSaved();
-            var properties = new Properties();
-            try (var input = Files.newInputStream(profile.config)) { properties.loadFromXML(input); }
-            check(properties.containsKey("capsDefaultsVersion") && new Hotkey(Hotkey.CAPS, '1').equals(profile.store.load().entries().getFirst().hotkey())
-                    && profile.startup.snapshot() == null, "legacy migration automatically persisted without startup registration");
         }
     }
 
@@ -414,7 +405,7 @@ class AutoSaveSmoke {
         int result = 0;
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-            textAndOptions(); blankRowsAndCapture(); concurrentEdits(); failuresAndClose(); shortcutConflict(); compositionAndCompatibility();
+            textAndOptions(); blankRowsAndCapture(); concurrentEdits(); failuresAndClose(); shortcutConflict(); compositionAndInitialProfiles();
         } catch (Throwable exception) {
             result = 1; report.add("FAIL " + exception); exception.printStackTrace();
         } finally {

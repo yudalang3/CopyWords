@@ -48,6 +48,7 @@ public record WindowState(int x, int y, int width, int height, boolean maximized
     }
 
     public WindowState fitToScreens(List<Rectangle> screens) {
+        if (screens.isEmpty()) return this;
         Rectangle original = bounds();
         Rectangle screen = screens.getFirst();
         long largestIntersection = -1;

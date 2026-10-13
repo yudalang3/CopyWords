@@ -243,6 +243,7 @@ class WindowsSmokeTest {
         Transferable previous = system.getContents(null);
         var notices = new LinkedBlockingQueue<String>();
         var count = new AtomicInteger();
+        int firstKey = '8';
         var otherWindow = new JFrame("CopyWords 测试：其他应用窗口");
         SwingUtilities.invokeAndWait(() -> {
             otherWindow.add(new JLabel("测试全局快捷键，完成后此窗口自动关闭", SwingConstants.CENTER));
@@ -250,12 +251,13 @@ class WindowsSmokeTest {
             otherWindow.toFront();
         });
         Thread.sleep(300);
-        var defaultConfig = new Config(List.of(Entry.create("AI4S", new Hotkey(Hotkey.ALT, '1')),
+        var defaultConfig = new Config(List.of(Entry.create("AI4S", new Hotkey(Hotkey.ALT, firstKey)),
                 Entry.create("人生价值", new Hotkey(6, '2')), Entry.create("xxx@example.com", new Hotkey(Hotkey.ALT, '3'))), false, false, false);
         try (var clipboard = new ClipboardService(notices::add)) {
             try (var service = new GlobalHotkeys(request -> { count.incrementAndGet(); clipboard.paste(request); })) {
-                assertTrue(service.start(defaultConfig).isEmpty());
-                press(0xA4, '1');
+                var warnings = service.start(defaultConfig);
+                assertTrue(warnings.isEmpty(), String.join("\n", warnings));
+                press(0xA4, firstKey);
                 assertNotNull(notices.poll(3, TimeUnit.SECONDS)); assertEquals("AI4S", clipboardText());
                 press(0xA4, '3');
                 assertNotNull(notices.poll(3, TimeUnit.SECONDS)); assertEquals("xxx@example.com", clipboardText());
@@ -264,23 +266,23 @@ class WindowsSmokeTest {
                 finally { key(0xA0, false); key(0xA2, false); }
                 assertNotNull(notices.poll(3, TimeUnit.SECONDS)); assertEquals("人生价值", clipboardText());
                 int before = count.get();
-                key(0xA4, true); key('1', true);
+                key(0xA4, true); key(firstKey, true);
                 try {
                     waitFor(() -> count.get() == before + 1);
                     assertNull(notices.poll(100, TimeUnit.MILLISECONDS), "must wait for modifier release");
-                    for (int i = 0; i < 4; i++) { key('1', true); Thread.sleep(100); }
+                    for (int i = 0; i < 4; i++) { key(firstKey, true); Thread.sleep(100); }
                     assertEquals(before + 1, count.get());
-                } finally { key('1', false); key(0xA4, false); }
+                } finally { key(firstKey, false); key(0xA4, false); }
                 assertNotNull(notices.poll(3, TimeUnit.SECONDS));
                 clipboard.pause();
                 service.pause();
-                press(0xA4, '1'); assertNull(notices.poll(200, TimeUnit.MILLISECONDS));
+                press(0xA4, firstKey); assertNull(notices.poll(200, TimeUnit.MILLISECONDS));
                 assertTrue(service.resume().isEmpty());
                 clipboard.resume();
-                press(0xA4, '1'); assertNotNull(notices.poll(3, TimeUnit.SECONDS));
-                var changed = new Config(List.of(Entry.create("  保存后的中文  ", new Hotkey(Hotkey.ALT, '1'))), false, false, false);
+                press(0xA4, firstKey); assertNotNull(notices.poll(3, TimeUnit.SECONDS));
+                var changed = new Config(List.of(Entry.create("  保存后的中文  ", new Hotkey(Hotkey.ALT, firstKey))), false, false, false);
                 service.apply(changed, () -> new ConfigStore(directory.resolve("config.xml")).save(changed));
-                press(0xA4, '1'); assertNotNull(notices.poll(3, TimeUnit.SECONDS));
+                press(0xA4, firstKey); assertNotNull(notices.poll(3, TimeUnit.SECONDS));
                 assertEquals("  保存后的中文  ", clipboardText());
                 assertEquals(changed, new ConfigStore(directory.resolve("config.xml")).load());
             }

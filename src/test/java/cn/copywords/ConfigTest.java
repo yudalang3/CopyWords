@@ -96,18 +96,22 @@ class ConfigTest {
         }
     }
 
-    @Test void missingCloseToTrayPreferenceDefaultsToFalseWithoutRewritingFile() throws Exception {
+    @Test void missingOrInvalidPreferencesAreRejectedWithoutRewritingFile() throws Exception {
         Path path = directory.resolve("config.xml");
         var store = new ConfigStore(path);
-        store.save(new Config(Config.defaults().entries(), false, true, true));
-        var properties = new Properties();
-        try (var input = Files.newInputStream(path)) { properties.loadFromXML(input); }
-        properties.remove("closeToTray");
-        try (var output = Files.newOutputStream(path)) { properties.storeToXML(output, "legacy", "UTF-8"); }
-        byte[] original = Files.readAllBytes(path);
-        assertFalse(store.load().closeToTray());
-        assertFalse(store.upgraded());
-        assertArrayEquals(original, Files.readAllBytes(path));
+        for (String name : List.of("autoStart", "startHidden", "closeToTray")) {
+            for (String value : Arrays.asList(null, "invalid")) {
+                store.save(Config.defaults());
+                var properties = new Properties();
+                try (var input = Files.newInputStream(path)) { properties.loadFromXML(input); }
+                if (value == null) properties.remove(name); else properties.setProperty(name, value);
+                try (var output = Files.newOutputStream(path)) { properties.storeToXML(output, "invalid", "UTF-8"); }
+                byte[] original = Files.readAllBytes(path);
+                var exception = assertThrows(java.io.IOException.class, store::load);
+                assertTrue(exception.getCause().getMessage().contains(name));
+                assertArrayEquals(original, Files.readAllBytes(path));
+            }
+        }
     }
 
     @Test void corruptConfigIsReportedWithoutOverwrite() throws Exception {
@@ -117,50 +121,39 @@ class ConfigTest {
         assertEquals("broken xml", Files.readString(path));
     }
 
-    @Test void reservedPasteShortcutIsRejectedOnSaveButLegacyFileIsPreserved() throws Exception {
+    @Test void reservedPasteShortcutIsRejectedOnLoadAndSaveWithoutOverwritingFile() throws Exception {
         var path = directory.resolve("config.xml");
         var store = new ConfigStore(path);
         var config = new Config(List.of(Entry.create("preserved", new Hotkey(Hotkey.CTRL, 'V'))), false, false, false);
         assertTrue(assertThrows(IllegalArgumentException.class, config::validate).getMessage().contains("Ctrl + V"));
         var properties = new Properties();
-        properties.setProperty("count", "1"); properties.setProperty("capsDefaultsVersion", "2");
+        properties.setProperty("count", "1");
         properties.setProperty("autoStart", "false"); properties.setProperty("startHidden", "false");
+        properties.setProperty("closeToTray", "false");
         properties.setProperty("entry.0.id", config.entries().getFirst().id());
         properties.setProperty("entry.0.text", "preserved");
         properties.setProperty("entry.0.modifiers", "2"); properties.setProperty("entry.0.key", "86");
-        try (var output = Files.newOutputStream(path)) { properties.storeToXML(output, "legacy", "UTF-8"); }
+        try (var output = Files.newOutputStream(path)) { properties.storeToXML(output, "invalid", "UTF-8"); }
         byte[] original = Files.readAllBytes(path);
-        assertEquals(config, store.load());
+        var exception = assertThrows(java.io.IOException.class, store::load);
+        assertTrue(exception.getCause().getMessage().contains("Ctrl + V"));
         assertArrayEquals(original, Files.readAllBytes(path));
         assertThrows(IllegalArgumentException.class, () -> store.save(config));
         assertArrayEquals(original, Files.readAllBytes(path));
         new Config(List.of(Entry.create("allowed", new Hotkey(Hotkey.CAPS | Hotkey.CTRL, 'V'))), false, false, false).validate();
     }
 
-    @Test void legacyDefaultsUpgradeWithoutChangingTextOrCustomBindings() throws Exception {
+    @Test void savedBindingsAreLoadedExactlyWithoutAutomaticConversion() throws Exception {
         var custom = new Hotkey(Hotkey.CTRL | Hotkey.SHIFT | Hotkey.ALT, '1');
-        var legacy = new Config(List.of(Entry.create("my first text", new Hotkey(Hotkey.ALT, '1')),
+        var original = new Config(List.of(Entry.create("my first text", new Hotkey(Hotkey.ALT, '1')),
                 Entry.create("中文", new Hotkey(6, '2')), Entry.create("mail", new Hotkey(Hotkey.ALT, '3')),
                 Entry.create("custom", custom), Entry.create("next", new Hotkey(Hotkey.ALT, '2'))), true, false, true);
         var path = directory.resolve("config.xml");
-        new ConfigStore(path).save(legacy);
-        var properties = new Properties();
-        try (var input = Files.newInputStream(path)) { properties.loadFromXML(input); }
-        properties.remove("capsDefaultsVersion");
-        try (var output = Files.newOutputStream(path)) { properties.storeToXML(output, "legacy", "UTF-8"); }
-        byte[] original = Files.readAllBytes(path);
-        var store = new ConfigStore(path); var upgraded = store.load();
-        assertTrue(store.upgraded());
-        assertTrue(upgraded.closeToTray());
-        assertEquals(new Hotkey(Hotkey.CAPS, '1'), upgraded.entries().get(0).hotkey());
-        assertEquals(new Hotkey(Hotkey.CAPS, '2'), upgraded.entries().get(1).hotkey());
-        assertEquals(new Hotkey(Hotkey.CAPS, '3'), upgraded.entries().get(2).hotkey());
-        assertEquals(custom, upgraded.entries().get(3).hotkey());
-        assertEquals(new Hotkey(Hotkey.CAPS, '4'), upgraded.entries().get(4).hotkey());
-        assertEquals(legacy.entries().stream().map(Entry::text).toList(), upgraded.entries().stream().map(Entry::text).toList());
-        assertArrayEquals(original, Files.readAllBytes(path));
-        store.save(upgraded);
-        assertEquals(upgraded, new ConfigStore(path).load());
+        var store = new ConfigStore(path);
+        store.save(original);
+        byte[] contents = Files.readAllBytes(path);
+        assertEquals(original, store.load());
+        assertArrayEquals(contents, Files.readAllBytes(path));
     }
 
     @Test void conflictMessageExplainsRecoveryInsteadOfOnlyErrorCode() {

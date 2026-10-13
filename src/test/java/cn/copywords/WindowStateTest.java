@@ -47,6 +47,11 @@ class WindowStateTest {
         assertEquals(original, original.fitToScreens(screens));
     }
 
+    @Test void unavailableScreensKeepSavedGeometry() {
+        var original = new WindowState(-1200, 100, 760, 800, true);
+        assertSame(original, original.fitToScreens(List.of()));
+    }
+
     @Test void removedMonitorAndSmallerScreenKeepWindowVisible() {
         var screen = new Rectangle(0, 0, 1280, 680);
         var adjusted = new WindowState(-1600, 700, 1600, 1280, true).fitToScreens(List.of(screen));
