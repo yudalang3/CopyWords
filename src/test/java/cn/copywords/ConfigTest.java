@@ -42,6 +42,11 @@ class ConfigTest {
         assertThrows(IllegalArgumentException.class, () -> new Hotkey(16, 'A'));
         assertThrows(IllegalArgumentException.class, () -> new Hotkey(Hotkey.ALT, KeyEvent.VK_F12));
         assertThrows(IllegalArgumentException.class, () -> new Hotkey(Hotkey.ALT, KeyEvent.VK_ENTER));
+        var minus = new KeyEvent(new Canvas(), KeyEvent.KEY_PRESSED, 0, KeyEvent.CTRL_DOWN_MASK, KeyEvent.VK_MINUS, '-');
+        assertThrows(IllegalArgumentException.class, () -> Hotkey.from(minus));
+        assertFalse(Hotkey.supported(MarkdownShortcuts.MINUS));
+        assertFalse(Hotkey.supported(MarkdownShortcuts.EQUALS));
+        assertFalse(Hotkey.supported(MarkdownShortcuts.BACKSLASH));
     }
 
     @Test void duplicateAndMultilineRowsAreRejected() {
@@ -164,5 +169,53 @@ class ConfigTest {
         assertTrue(advice.contains("重试"));
         assertFalse(advice.contains("点击“保存”"));
         assertFalse(advice.contains("1409"));
+    }
+
+    @Test void writingShortcutsStayOutOfPhraseEntries() {
+        assertEquals(new MarkdownShortcuts.Action("``", 1), MarkdownShortcuts.match(MarkdownShortcuts.MINUS));
+        assertEquals(new MarkdownShortcuts.Action("****", 2), MarkdownShortcuts.match(MarkdownShortcuts.EQUALS));
+        assertEquals(new MarkdownShortcuts.Action("**", 0), MarkdownShortcuts.match(MarkdownShortcuts.BACKSLASH));
+        assertNull(MarkdownShortcuts.match('1'));
+    }
+
+    @Test void savedWritingRowsAreDroppedWithoutRewritingFile() throws Exception {
+        Path path = directory.resolve("config.xml");
+        var store = new ConfigStore(path);
+        Entry kept = Entry.create("AI4S", new Hotkey(Hotkey.CAPS, '1'));
+        store.save(new Config(List.of(kept), false, true, false));
+        var properties = new Properties();
+        try (var input = Files.newInputStream(path)) { properties.loadFromXML(input); }
+        properties.setProperty("count", "2");
+        properties.setProperty("markdownSnippetsSeeded", "true");
+        properties.setProperty("entry.1.id", "writing-backtick");
+        properties.setProperty("entry.1.text", "``");
+        properties.setProperty("entry.1.caret", "1");
+        properties.setProperty("entry.1.modifiers", "8");
+        properties.setProperty("entry.1.key", Integer.toString(MarkdownShortcuts.MINUS));
+        try (var output = Files.newOutputStream(path)) { properties.storeToXML(output, "mixed", "UTF-8"); }
+        byte[] original = Files.readAllBytes(path);
+        Config loaded = store.load();
+        assertEquals(List.of(kept), loaded.entries());
+        assertArrayEquals(original, Files.readAllBytes(path));
+    }
+
+    @Test void pasteActionsRetreatCaretWithExtendedLeft() {
+        var none = InputSimulator.pasteActions(0);
+        assertEquals(4, none.size());
+        assertEquals(List.of(false, false, true, true), none.stream().map(InputSimulator.KeyAction::up).toList());
+        var one = InputSimulator.pasteActions(1);
+        assertEquals(6, one.size());
+        assertEquals(0x25, one.get(4).virtualKey());
+        assertTrue(one.get(4).extended());
+        assertFalse(one.get(4).up());
+        assertTrue(one.get(5).up() && one.get(5).extended());
+        var two = InputSimulator.pasteActions(2);
+        assertEquals(8, two.size());
+        assertEquals(List.of((int) 'V', 0xA2), InputSimulator.stuckKeys(two, 2, key -> false));
+        assertEquals(List.of(0xA2), InputSimulator.stuckKeys(two, 3, key -> false));
+        assertEquals(List.of(), InputSimulator.stuckKeys(two, 4, key -> false));
+        assertEquals(List.of(0x25), InputSimulator.stuckKeys(two, 5, key -> false));
+        assertEquals(List.of(0xA2), InputSimulator.stuckKeys(two, 2, key -> key == 'V'));
+        assertEquals(List.of((int) 'V'), InputSimulator.stuckKeys(two, 2, key -> key == 0x11));
     }
 }

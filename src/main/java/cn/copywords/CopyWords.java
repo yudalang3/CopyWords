@@ -92,7 +92,13 @@ public final class CopyWords {
         JLabel title = new JLabel("CopyWords");
         title.setFont(title.getFont().deriveFont(Font.BOLD, 28));
         heading.add(title, BorderLayout.NORTH);
-        heading.add(new JLabel("按快捷键自动复制并粘贴；Ctrl / Shift / 左 Alt 组合请松开按键。"), BorderLayout.SOUTH);
+        JPanel notes = new JPanel(new BorderLayout(0, 6));
+        notes.setOpaque(false);
+        JLabel writing = new JLabel("<html>写作快捷键：Caps + - 插入 ``，光标在中间；Caps + = 插入 ****，光标在中间；Caps + \\ 插入 **。</html>");
+        writing.setName("writing-shortcuts");
+        notes.add(writing, BorderLayout.NORTH);
+        notes.add(new JLabel("按快捷键自动复制并粘贴；Ctrl / Shift / 左 Alt 组合请松开按键。"), BorderLayout.SOUTH);
+        heading.add(notes, BorderLayout.SOUTH);
         content.add(heading, BorderLayout.NORTH);
 
         JPanel list = new JPanel(new BorderLayout(0, 8));

@@ -143,9 +143,15 @@ public final class ClipboardService implements AutoCloseable {
                         if (!valid(job)) { finish("自动粘贴未完成：请求已取消，请重新按快捷键。"); return; }
                         result = platform.send(job.request, snapshot);
                     }
-                    if (result.count() == 4) status.accept("已复制并发送粘贴命令。");
-                    else {
-                        System.err.println("自动粘贴输入发送失败：" + result.count() + "/4，Windows error=" + result.error());
+                    int expected = 4 + 2 * job.request.caretFromEnd();
+                    if (result.count() == expected) status.accept("已复制并发送粘贴命令。");
+                    else if (result.count() >= 4 && expected > 4) {
+                        System.err.println("自动粘贴光标移动失败：" + result.count() + "/" + expected
+                                + "，Windows error=" + result.error());
+                        status.accept("已粘贴，但光标未移到符号中间。请手动移动光标。");
+                    } else {
+                        System.err.println("自动粘贴输入发送失败：" + result.count() + "/" + expected
+                                + "，Windows error=" + result.error());
                         status.accept("自动粘贴未完成：已复制到剪贴板，但发送失败，请手动粘贴；管理员窗口可能阻止模拟输入。");
                     }
                     job.stage = Stage.GAP;

@@ -8,6 +8,9 @@ import com.sun.jna.ptr.IntByReference;
 import com.sun.jna.win32.StdCallLibrary;
 import java.awt.Toolkit;
 import java.awt.datatransfer.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.IntPredicate;
 
 final class InputSimulator implements ClipboardService.Platform {
     static final long SYNTHETIC_PASTE = 0x43574F53L;
@@ -89,40 +92,78 @@ final class InputSimulator implements ClipboardService.Platform {
         };
     }
 
+    record KeyAction(int virtualKey, boolean up, boolean extended) {}
+
+    static List<KeyAction> pasteActions(int caretFromEnd) {
+        if (caretFromEnd < 0) throw new IllegalArgumentException("光标位置无效");
+        var actions = new ArrayList<KeyAction>();
+        actions.add(new KeyAction(0xA2, false, false));
+        actions.add(new KeyAction('V', false, false));
+        actions.add(new KeyAction('V', true, false));
+        actions.add(new KeyAction(0xA2, true, false));
+        for (int i = 0; i < caretFromEnd; i++) {
+            actions.add(new KeyAction(0x25, false, true));
+            actions.add(new KeyAction(0x25, true, true));
+        }
+        return List.copyOf(actions);
+    }
+
+    static List<Integer> stuckKeys(List<KeyAction> actions, int sent, IntPredicate held) {
+        var down = new ArrayList<Integer>();
+        int limit = Math.max(0, Math.min(sent, actions.size()));
+        for (int i = 0; i < limit; i++) {
+            KeyAction action = actions.get(i);
+            if (action.up()) down.remove((Integer) action.virtualKey());
+            else if (!down.contains(action.virtualKey())) down.add(action.virtualKey());
+        }
+        var stuck = new ArrayList<Integer>();
+        for (int i = down.size() - 1; i >= 0; i--) {
+            int key = down.get(i);
+            if (held.test(key) || key == 0xA2 && held.test(0x11)) continue;
+            stuck.add(key);
+        }
+        return stuck;
+    }
+
     @Override public ClipboardService.SendResult send(PasteRequest request, ClipboardService.Snapshot snapshot) {
         // Recheck immediately before injection; never release the user's modifiers to force a paste.
-        var inputs = inputs(new int[] {0xA2, 'V', 'V', 0xA2}, new boolean[] {false, false, true, true});
+        var actions = pasteActions(request.caretFromEnd());
+        var inputs = inputs(actions);
         if (!targetMatches(request) || !keysReleased(request) || clipboardVersion() != snapshot.version())
             throw new IllegalStateException("发送前目标、按键或剪贴板已变化");
         int sent = User32.INSTANCE.SendInput(new DWORD(inputs.length), inputs, inputs[0].size()).intValue();
         int error = sent == inputs.length ? 0 : Kernel32.INSTANCE.GetLastError();
-        if (sent > 0 && sent < inputs.length) {
-            var keys = new java.util.ArrayList<Integer>();
-            if (sent == 2 && !request.heldKeys().test('V')) keys.add((int) 'V');
-            if (!request.heldKeys().test(0xA2) && !request.heldKeys().test(0x11)) keys.add(0xA2);
-            if (!keys.isEmpty()) {
-                int[] releaseKeys = keys.stream().mapToInt(Integer::intValue).toArray();
-                boolean[] up = new boolean[releaseKeys.length];
-                java.util.Arrays.fill(up, true);
-                var releases = inputs(releaseKeys, up);
-                int cleaned = User32.INSTANCE.SendInput(new DWORD(releases.length), releases, releases[0].size()).intValue();
-                if (cleaned != releases.length) System.err.println("自动粘贴按键清理失败：" + cleaned + "/" + releases.length);
-            }
-        }
+        if (sent > 0 && sent < inputs.length) releaseStuck(actions, sent, request.heldKeys());
         return new ClipboardService.SendResult(sent, error);
     }
 
-    private static WinUser.INPUT[] inputs(int[] keys, boolean[] up) {
+    private static void releaseStuck(List<KeyAction> actions, int sent, IntPredicate held) {
+        var releases = new ArrayList<KeyAction>();
+        for (int key : stuckKeys(actions, sent, held)) {
+            boolean extended = false;
+            for (KeyAction action : actions) if (action.virtualKey() == key) extended = action.extended();
+            releases.add(new KeyAction(key, true, extended));
+        }
+        if (releases.isEmpty()) return;
+        var inputs = inputs(releases);
+        int cleaned = User32.INSTANCE.SendInput(new DWORD(inputs.length), inputs, inputs[0].size()).intValue();
+        if (cleaned != inputs.length) System.err.println("自动粘贴按键清理失败：" + cleaned + "/" + inputs.length);
+    }
+
+    private static WinUser.INPUT[] inputs(List<KeyAction> actions) {
         // JNA requires contiguous native memory, not an array of separately allocated INPUT objects.
-        var inputs = (WinUser.INPUT[]) new WinUser.INPUT().toArray(keys.length);
+        var inputs = (WinUser.INPUT[]) new WinUser.INPUT().toArray(actions.size());
         var layout = User32.INSTANCE.GetKeyboardLayout(0);
         for (int i = 0; i < inputs.length; i++) {
+            KeyAction action = actions.get(i);
+            int flags = (action.up() ? WinUser.KEYBDINPUT.KEYEVENTF_KEYUP : 0)
+                    | (action.extended() ? WinUser.KEYBDINPUT.KEYEVENTF_EXTENDEDKEY : 0);
             inputs[i].type = new DWORD(WinUser.INPUT.INPUT_KEYBOARD);
             inputs[i].input.setType("ki");
             inputs[i].input.ki = new WinUser.KEYBDINPUT();
-            inputs[i].input.ki.wVk = new WORD(keys[i]);
-            inputs[i].input.ki.wScan = new WORD(User32.INSTANCE.MapVirtualKeyEx(keys[i], 4, layout) & 0xFF);
-            inputs[i].input.ki.dwFlags = new DWORD(up[i] ? WinUser.KEYBDINPUT.KEYEVENTF_KEYUP : 0);
+            inputs[i].input.ki.wVk = new WORD(action.virtualKey());
+            inputs[i].input.ki.wScan = new WORD(User32.INSTANCE.MapVirtualKeyEx(action.virtualKey(), 4, layout) & 0xFF);
+            inputs[i].input.ki.dwFlags = new DWORD(flags);
             inputs[i].input.ki.time = new DWORD(0);
             inputs[i].input.ki.dwExtraInfo = new BaseTSD.ULONG_PTR(SYNTHETIC_PASTE);
         }

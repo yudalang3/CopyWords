@@ -19,9 +19,11 @@ public final class ConfigStore {
             var entries = new ArrayList<Entry>();
             for (int i = 0; i < count; i++) {
                 String prefix = "entry." + i + ".";
+                String keyText = properties.getProperty(prefix + "key");
+                if (keyText != null && MarkdownShortcuts.reservedKey(Integer.parseInt(keyText))) continue;
                 String modifiers = properties.getProperty(prefix + "modifiers");
                 Hotkey hotkey = modifiers == null ? null : new Hotkey(Integer.parseInt(modifiers),
-                        Integer.parseInt(properties.getProperty(prefix + "key")));
+                        Integer.parseInt(keyText));
                 String id = properties.getProperty(prefix + "id");
                 String text = properties.getProperty(prefix + "text");
                 if (id == null || text == null) throw new IllegalArgumentException("条目不完整");

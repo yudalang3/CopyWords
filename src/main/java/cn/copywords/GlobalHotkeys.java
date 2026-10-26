@@ -67,7 +67,7 @@ public final class GlobalHotkeys implements AutoCloseable {
                             if (binding.registered && binding.id == id) {
                                 Hotkey key = binding.entry.hotkey();
                                 if ((key.modifiers() & Hotkey.ALT) == 0 || caps.takeLeftAltPress(key))
-                                    trigger(key, binding.entry.text());
+                                    trigger(key.key(), binding.entry.text(), 0);
                                 break;
                             }
                         }
@@ -90,9 +90,9 @@ public final class GlobalHotkeys implements AutoCloseable {
         try { ready.join(); } catch (RuntimeException exception) { caps.close(); throw exception; }
     }
 
-    private void trigger(Hotkey key, String text) {
+    private void trigger(int triggerKey, String text, int caretFromEnd) {
         long time = System.nanoTime();
-        paste.accept(new PasteRequest(text, key.key(), InputSimulator.target(), time, caps::isKeyDown));
+        paste.accept(new PasteRequest(text, triggerKey, InputSimulator.target(), time, caps::isKeyDown, caretFromEnd));
     }
 
     private <T> T invoke(Callable<T> action) {

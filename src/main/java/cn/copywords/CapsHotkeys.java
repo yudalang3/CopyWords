@@ -8,12 +8,12 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.function.Consumer;
-import java.util.function.BiConsumer;
 
 /** A dedicated hook thread: callbacks only match keys and queue copy/capture work. */
 final class CapsHotkeys implements AutoCloseable {
+    @FunctionalInterface interface Paste { void accept(int triggerKey, String text, int caretFromEnd); }
     private static final long SYNTHETIC_CAPS = 0x43574F52L;
-    private final BiConsumer<Hotkey, String> paste;
+    private final Paste paste;
     private final Set<Integer> downKeys = new HashSet<>(), consumed = new HashSet<>();
     private final WinUser.LowLevelKeyboardProc callback = this::onKey;
     private volatile Map<Hotkey, String> bindings = Map.of();
@@ -27,7 +27,7 @@ final class CapsHotkeys implements AutoCloseable {
     private int threadId;
     private boolean capsHeld, capsUsed;
 
-    CapsHotkeys(BiConsumer<Hotkey, String> paste) {
+    CapsHotkeys(Paste paste) {
         this.paste = paste;
         var ready = new CompletableFuture<Void>();
         thread = new Thread(() -> {
@@ -112,6 +112,16 @@ final class CapsHotkeys implements AutoCloseable {
             if (capsHeld && down) {
                 capsUsed = true;
                 if (downKeys.contains(0xA5)) return next(code, event, key);
+                if (!downKeys.contains(0x5B) && !downKeys.contains(0x5C)
+                        && !pressed(0xA2, 0xA3, 0x11) && !pressed(0xA0, 0xA1, 0x10) && !downKeys.contains(0xA4)) {
+                    MarkdownShortcuts.Action writing = MarkdownShortcuts.match(vk);
+                    if (writing != null) {
+                        consumed.add(vk);
+                        if (!wasDown && capture == null && !paused)
+                            paste.accept(vk, writing.text(), writing.caretFromEnd());
+                        return new LRESULT(1);
+                    }
+                }
                 if (Hotkey.supported(vk) && !downKeys.contains(0x5B) && !downKeys.contains(0x5C)) {
                     int modifiers = Hotkey.CAPS
                             | (pressed(0xA2, 0xA3, 0x11) ? Hotkey.CTRL : 0)
@@ -122,7 +132,7 @@ final class CapsHotkeys implements AutoCloseable {
                     String text = bindings.get(hotkey);
                     if (listener != null || !paused && text != null) {
                         consumed.add(vk);
-                        if (!wasDown) { if (listener != null) listener.accept(hotkey); else paste.accept(hotkey, text); }
+                        if (!wasDown) { if (listener != null) listener.accept(hotkey); else paste.accept(vk, text, 0); }
                         return new LRESULT(1);
                     }
                 }

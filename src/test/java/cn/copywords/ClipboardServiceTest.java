@@ -38,8 +38,9 @@ class ClipboardServiceTest {
             millis = until;
         }
         void paste(String value) { service.paste(request(value, true)); }
-        PasteRequest request(String value, boolean known) {
-            return new PasteRequest(value, '1', new PasteRequest.Target(known ? 1 : 0, 2, known ? 3 : 0, 4), now(), key -> false);
+        PasteRequest request(String value, boolean known) { return request(value, known, 0); }
+        PasteRequest request(String value, boolean known, int caretFromEnd) {
+            return new PasteRequest(value, '1', new PasteRequest.Target(known ? 1 : 0, 2, known ? 3 : 0, 4), now(), key -> false, caretFromEnd);
         }
         public void write(String value) {
             writes++;
@@ -180,6 +181,27 @@ class ClipboardServiceTest {
         try (var env = new Environment()) {
             env.busyReads = 3; env.paste("A"); env.advance(400);
             assertEquals(1, env.writes); assertEquals(List.of("write:A", "send:A"), env.events);
+        }
+    }
+
+    @Test void partialCaretMoveIsReportedOnceWithoutRetry() {
+        String errors = captureErrors(() -> { try (var env = new Environment()) {
+            env.sent = 4;
+            env.service.paste(env.request("****", true, 2));
+            env.advance(400);
+            assertEquals(List.of("write:****", "send:****"), env.events);
+            assertTrue(env.messages.getFirst().contains("光标未移"));
+            assertFalse(env.messages.getFirst().contains("发送粘贴命令"));
+        } });
+        assertTrue(errors.contains("光标移动失败"));
+    }
+
+    @Test void completeCaretSequenceReportsPasteSent() {
+        try (var env = new Environment()) {
+            env.sent = 8;
+            env.service.paste(env.request("****", true, 2));
+            env.advance(400);
+            assertTrue(env.messages.getFirst().contains("发送粘贴命令"));
         }
     }
 }
