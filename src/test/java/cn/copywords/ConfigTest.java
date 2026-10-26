@@ -199,6 +199,39 @@ class ConfigTest {
         assertArrayEquals(original, Files.readAllBytes(path));
     }
 
+    @Test void configWithOnlyWritingRowsFallsBackToDefaultEntriesWithoutRewritingFile() throws Exception {
+        Path path = directory.resolve("config.xml");
+        var properties = new Properties();
+        properties.setProperty("count", "1");
+        properties.setProperty("autoStart", "false");
+        properties.setProperty("startHidden", "true");
+        properties.setProperty("closeToTray", "false");
+        properties.setProperty("entry.0.id", "writing-backtick");
+        properties.setProperty("entry.0.text", "``");
+        properties.setProperty("entry.0.modifiers", "8");
+        properties.setProperty("entry.0.key", Integer.toString(MarkdownShortcuts.MINUS));
+        try (var output = Files.newOutputStream(path)) { properties.storeToXML(output, "legacy", "UTF-8"); }
+        byte[] original = Files.readAllBytes(path);
+        Config loaded = new ConfigStore(path).load();
+        var defaults = Config.defaults().entries();
+        assertEquals(defaults.size(), loaded.entries().size());
+        for (int i = 0; i < defaults.size(); i++) {
+            assertEquals(defaults.get(i).text(), loaded.entries().get(i).text());
+            assertEquals(defaults.get(i).hotkey(), loaded.entries().get(i).hotkey());
+        }
+        assertFalse(loaded.autoStart());
+        assertTrue(loaded.startHidden());
+        assertFalse(loaded.closeToTray());
+        assertArrayEquals(original, Files.readAllBytes(path));
+    }
+
+    @Test void intentionallyEmptyConfigStaysEmpty() throws Exception {
+        Path path = directory.resolve("config.xml");
+        var store = new ConfigStore(path);
+        store.save(new Config(List.of(), false, false, false));
+        assertEquals(List.of(), store.load().entries());
+    }
+
     @Test void pasteActionsRetreatCaretWithExtendedLeft() {
         var none = InputSimulator.pasteActions(0);
         assertEquals(4, none.size());

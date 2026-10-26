@@ -17,10 +17,13 @@ public final class ConfigStore {
             int count = Integer.parseInt(properties.getProperty("count"));
             if (count < 0) throw new IllegalArgumentException("条目数量无效");
             var entries = new ArrayList<Entry>();
+            boolean droppedWriting = false;
             for (int i = 0; i < count; i++) {
                 String prefix = "entry." + i + ".";
                 String keyText = properties.getProperty(prefix + "key");
-                if (keyText != null && MarkdownShortcuts.reservedKey(Integer.parseInt(keyText))) continue;
+                if (keyText != null && MarkdownShortcuts.reservedKey(Integer.parseInt(keyText))) {
+                    droppedWriting = true; continue;
+                }
                 String modifiers = properties.getProperty(prefix + "modifiers");
                 Hotkey hotkey = modifiers == null ? null : new Hotkey(Integer.parseInt(modifiers),
                         Integer.parseInt(keyText));
@@ -29,7 +32,8 @@ public final class ConfigStore {
                 if (id == null || text == null) throw new IllegalArgumentException("条目不完整");
                 entries.add(new Entry(id, text, hotkey));
             }
-            var config = new Config(entries, readBoolean(properties, "autoStart"),
+            var effective = entries.isEmpty() && droppedWriting ? Config.defaults().entries() : entries;
+            var config = new Config(effective, readBoolean(properties, "autoStart"),
                     readBoolean(properties, "startHidden"), readBoolean(properties, "closeToTray"));
             config.validate();
             return config;

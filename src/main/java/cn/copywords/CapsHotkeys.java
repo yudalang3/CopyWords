@@ -52,6 +52,10 @@ final class CapsHotkeys implements AutoCloseable {
     void pause(boolean paused) { this.paused = paused; altPresses.clear(); }
     void capture(Consumer<Hotkey> listener) { capture = listener; }
     boolean isKeyDown(int key) { return heldKeys.contains(key); }
+    static boolean trackCaps(boolean capturing, boolean paused) { return capturing || !paused; }
+    static boolean fireWritingKey(boolean repeated, boolean capturing, boolean paused) {
+        return !repeated && !capturing && !paused;
+    }
     boolean takeLeftAltPress(Hotkey key) {
         var presses = altPresses.get(key);
         if (presses == null) return false;
@@ -93,7 +97,7 @@ final class CapsHotkeys implements AutoCloseable {
                 }
             }
             if (vk == 0x14) {
-                if (down && !wasDown && (capture != null || !paused && bindings.keySet().stream().anyMatch(Hotkey::usesCaps))) {
+                if (down && !wasDown && trackCaps(capture != null, paused)) {
                     capsHeld = true; capsUsed = false;
                 }
                 if (capsHeld) {
@@ -116,9 +120,9 @@ final class CapsHotkeys implements AutoCloseable {
                         && !pressed(0xA2, 0xA3, 0x11) && !pressed(0xA0, 0xA1, 0x10) && !downKeys.contains(0xA4)) {
                     MarkdownShortcuts.Action writing = MarkdownShortcuts.match(vk);
                     if (writing != null) {
+                        if (!fireWritingKey(wasDown, capture != null, paused)) return next(code, event, key);
                         consumed.add(vk);
-                        if (!wasDown && capture == null && !paused)
-                            paste.accept(vk, writing.text(), writing.caretFromEnd());
+                        paste.accept(vk, writing.text(), writing.caretFromEnd());
                         return new LRESULT(1);
                     }
                 }
