@@ -174,7 +174,7 @@ class ConfigTest {
     @Test void writingShortcutsStayOutOfPhraseEntries() {
         assertEquals(new MarkdownShortcuts.Action("``", 1), MarkdownShortcuts.match(MarkdownShortcuts.MINUS));
         assertEquals(new MarkdownShortcuts.Action("****", 2), MarkdownShortcuts.match(MarkdownShortcuts.EQUALS));
-        assertEquals(new MarkdownShortcuts.Action("**", 0), MarkdownShortcuts.match(MarkdownShortcuts.BACKSLASH));
+        assertEquals(new MarkdownShortcuts.Action("**", 1), MarkdownShortcuts.match(MarkdownShortcuts.BACKSLASH));
         assertNull(MarkdownShortcuts.match('1'));
     }
 

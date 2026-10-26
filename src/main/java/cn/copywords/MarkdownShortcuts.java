@@ -13,7 +13,7 @@ final class MarkdownShortcuts {
     static Action match(int virtualKey) {
         if (virtualKey == MINUS) return new Action("``", 1);
         if (virtualKey == EQUALS) return new Action("****", 2);
-        if (virtualKey == BACKSLASH) return new Action("**", 0);
+        if (virtualKey == BACKSLASH) return new Action("**", 1);
         return null;
     }
 

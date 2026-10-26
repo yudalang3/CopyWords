@@ -63,6 +63,13 @@ class WindowsSmokeTest {
         return value.get();
     }
 
+    static int editorCaret(JTextArea editor) {
+        var value = new AtomicInteger();
+        try { SwingUtilities.invokeAndWait(() -> value.set(editor.getCaretPosition())); }
+        catch (Exception exception) { throw new RuntimeException(exception); }
+        return value.get();
+    }
+
     private static final class Editor implements AutoCloseable {
         final JFrame frame = new JFrame("CopyWords 自动粘贴测试");
         final JTextArea text = new JTextArea();
@@ -100,6 +107,50 @@ class WindowsSmokeTest {
             if (Toolkit.getDefaultToolkit().getLockingKeyState(java.awt.event.KeyEvent.VK_CAPS_LOCK) != caps)
                 Toolkit.getDefaultToolkit().setLockingKeyState(java.awt.event.KeyEvent.VK_CAPS_LOCK, caps);
             if (previous != null) system.setContents(previous, null);
+        }
+    }
+
+    @Test void writingShortcutsPlaceTypedTextBetweenSymbols() throws Exception {
+        var notices = new LinkedBlockingQueue<String>();
+        try (var editor = new Editor(); var clipboard = new ClipboardService(notices::add);
+             var hotkeys = new GlobalHotkeys(clipboard::paste)) {
+            assertTrue(hotkeys.start(new Config(List.of(), false, false, false)).isEmpty());
+            int[] keys = {MarkdownShortcuts.MINUS, MarkdownShortcuts.EQUALS, MarkdownShortcuts.BACKSLASH};
+            String[] halves = {"`", "**", "*"};
+            for (int i = 0; i < keys.length; i++) {
+                for (String initial : List.of("", "AB", "AxB")) {
+                    SwingUtilities.invokeAndWait(() -> {
+                        editor.text.setText(initial);
+                        int start = initial.isEmpty() ? 0 : 1;
+                        editor.text.select(start, initial.equals("AxB") ? 2 : start);
+                    });
+                    press(0x14, keys[i]);
+                    String message = notices.poll(3, TimeUnit.SECONDS);
+                    assertNotNull(message);
+                    assertTrue(message.contains("发送粘贴命令"), message);
+                    String prefix = initial.isEmpty() ? "" : "A";
+                    String suffix = initial.isEmpty() ? "" : "B";
+                    String symbols = halves[i] + halves[i];
+                    waitFor(() -> editorText(editor.text).equals(prefix + symbols + suffix));
+                    int caret = prefix.length() + halves[i].length();
+                    waitFor(() -> editorCaret(editor.text) == caret);
+                    key('A', true); key('A', false);
+                    String expected = prefix + halves[i] + "a" + halves[i] + suffix;
+                    waitFor(() -> editorText(editor.text).equals(expected));
+                    // Trigger again without resetting the editor to check consecutive insertions.
+                    press(0x14, keys[i]);
+                    String nextMessage = notices.poll(3, TimeUnit.SECONDS);
+                    assertNotNull(nextMessage);
+                    assertTrue(nextMessage.contains("发送粘贴命令"), nextMessage);
+                    String consecutive = prefix + halves[i] + "a" + symbols + halves[i] + suffix;
+                    waitFor(() -> editorText(editor.text).equals(consecutive));
+                    int consecutiveCaret = caret + 1 + halves[i].length();
+                    waitFor(() -> editorCaret(editor.text) == consecutiveCaret);
+                    key('B', true); key('B', false);
+                    String withSecondLetter = prefix + halves[i] + "a" + halves[i] + "b" + symbols + suffix;
+                    waitFor(() -> editorText(editor.text).equals(withSecondLetter));
+                }
+            }
         }
     }
 
